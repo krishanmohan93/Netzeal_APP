@@ -19,6 +19,7 @@ interface Project {
   title: string;
   subtitle: string;
   icon?: string;
+  description?: string;
 }
 
 interface ProjectCarouselProps {
