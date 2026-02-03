@@ -71,11 +71,7 @@ const UserPostsFeed: React.FC<UserPostsFeedProps> = ({
 
   const renderEmptyState = () => {
     if (posts.length === 0 && !loading) {
-      return (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyStateText}>No posts yet</Text>
-        </View>
-      );
+      return <View style={styles.emptyState} />;
     }
     return null;
   };
@@ -128,10 +124,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xl,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  emptyStateText: {
-    fontSize: typography.body.fontSize,
-    color: colors.textSecondary,
   },
 });
 

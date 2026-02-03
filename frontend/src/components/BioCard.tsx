@@ -12,10 +12,14 @@ interface BioCardProps {
 }
 
 const BioCard: React.FC<BioCardProps> = ({ title, description }) => {
+  const safeTitle = title || 'Bio';
+  const safeDescription = description || '';
+
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>{title}</Text>
-      <Text style={styles.cardText}>{description}</Text>
+      {/* All string values must be wrapped in <Text> in React Native. */}
+      <Text style={styles.cardTitle}>{safeTitle}</Text>
+      <Text style={styles.cardText}>{safeDescription}</Text>
     </View>
   );
 };

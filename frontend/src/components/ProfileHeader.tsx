@@ -23,11 +23,8 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({
   following,
   avatarUrl,
 }) => {
-  const initials = name
-    .split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase();
+  const safeName = (name || 'User').trim();
+  const safeTagline = (tagline || '').trim();
 
   return (
     <View style={styles.container}>
@@ -39,17 +36,16 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({
             style={styles.avatarImage}
           />
         ) : (
-          <View style={styles.avatarPlaceholder}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
+          <View style={styles.avatarPlaceholder} />
         )}
       </View>
 
       {/* Name and Tagline */}
-      <Text style={styles.nameText}>{name}</Text>
-      {tagline && tagline.trim() !== '' && (
+      {/* Note: All string values must be rendered inside <Text> in React Native. */}
+      <Text style={styles.nameText}>{safeName}</Text>
+      {safeTagline !== '' && (
         <Text style={styles.taglineText} numberOfLines={2}>
-          {tagline}
+          {safeTagline}
         </Text>
       )}
 
@@ -94,14 +90,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: {
-    fontSize: 40,
-    fontWeight: 'bold',
-    color: colors.surface,
+    backgroundColor: colors.divider,
   },
   nameText: {
     fontSize: typography.h3.fontSize,

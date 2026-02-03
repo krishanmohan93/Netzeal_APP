@@ -2,7 +2,7 @@
  * ProfileDashboardScreen
  * Complete profile screen with all sections: header, bio, projects, experience, posts, and CV upload
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,7 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  Modal,
-  FlatList,
-  Dimensions,
   Share as RNShare,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -35,9 +31,7 @@ import FullscreenMediaViewer from '../components/FullscreenMediaViewer';
 
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
 import { contentAPI, authAPI, socialAPI } from '../services/api';
-import { AuthContext } from '../context/AuthContext';
 
-const { width, height } = Dimensions.get('window');
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -92,68 +86,60 @@ interface Post {
 }
 
 // ============================================================================
-// DUMMY DATA
+// SAFE DEFAULTS
 // ============================================================================
 
-const MOCK_PROFILE: UserProfile = {
-  id: '1',
-  username: 'alex_chen',
-  fullName: 'Alex Chen',
-  email: 'alex@example.com',
-  bio: 'Building scalable AI solutions and shaping the future of digital interactions. Passionate about connecting people and technology for positive impact.',
-  tagline: 'AI Architect | Product Strategist | Future of Work Enthusiast',
-  avatar: 'https://i.pravatar.cc/300?img=45',
-  peers: 4200,
-  following: 250,
+const EMPTY_PROFILE: UserProfile = {
+  id: '',
+  username: 'user',
+  fullName: '',
+  email: '',
+  bio: '',
+  tagline: '',
+  avatar: '',
+  peers: 0,
+  following: 0,
 };
 
-const MOCK_PROJECTS: Project[] = [
-  {
-    id: '1',
-    title: 'Project NeuraNet',
-    subtitle: 'AI Platform',
-    icon: 'neural',
-    description: 'Advanced neural network platform for enterprise',
-  },
-  {
-    id: '2',
-    title: 'Smart City Initiative',
-    subtitle: 'IoT & Data',
-    icon: 'city',
-    description: 'Connected urban solutions',
-  },
-  {
-    id: '3',
-    title: 'Decentralized Identity',
-    subtitle: 'Blockchain Pilot',
-    icon: 'blockchain',
-    description: 'Identity management system',
-  },
-];
+const toSafeString = (value: any): string =>
+  value === null || value === undefined ? '' : String(value);
 
-const MOCK_EXPERIENCE: Experience[] = [
-  {
-    id: '1',
-    title: 'Senior AI Architect at TechNova Solutions',
-    role: 'Leadership & Strategy',
-    year: '[2021 - Present]',
-    icon: 'company',
-  },
-  {
-    id: '2',
-    title: 'Product Strategist (Intern) at FutureFoundry',
-    role: 'Product Development',
-    year: '[2020]',
-    icon: 'intern',
-  },
-  {
-    id: '3',
-    title: 'Research Assistant at Stanford AI Lab',
-    role: 'Research',
-    year: '[2019 - 2020]',
-    icon: 'research',
-  },
-];
+const normalizeUserId = (value: any): string | null => {
+  if (value === null || value === undefined) return null;
+  const id = String(value).trim();
+  return id.length > 0 ? id : null;
+};
+
+const normalizeProfile = (
+  data: any,
+  fallback: UserProfile,
+  overrides: Partial<UserProfile> = {}
+): UserProfile => {
+  const source = data || {};
+  const username = toSafeString(
+    source.username || source.user_name || fallback.username || 'user'
+  );
+  const fullName = toSafeString(
+    source.full_name || source.fullName || source.name || fallback.fullName || username || 'User'
+  );
+
+  return {
+    id: toSafeString(
+      source.public_id || source.id || source.user_id || source.userId || fallback.id || 'unknown'
+    ),
+    username,
+    fullName,
+    email: toSafeString(source.email || fallback.email || ''),
+    bio: toSafeString(source.bio ?? fallback.bio ?? ''),
+    tagline: toSafeString(source.tagline ?? fallback.tagline ?? ''),
+    avatar: toSafeString(
+    source.profile_photo || source.profile_picture || source.avatar || fallback.avatar || ''
+  ),
+    peers: Number(source.followers_count ?? source.peers ?? source.followers ?? fallback.peers ?? 0) || 0,
+    following: Number(source.following_count ?? source.following ?? fallback.following ?? 0) || 0,
+    ...overrides,
+  };
+};
 
 // ============================================================================
 // POST CARD COMPONENT (Reused from HomeScreen)
@@ -216,9 +202,7 @@ const PostCard = ({
             message: `${title}\n\n${description}`,
             title: title,
           });
-        } catch (error) {
-          console.error('Share error:', error);
-        }
+        } catch (error) {}
         break;
     }
   };
@@ -385,11 +369,12 @@ const PostCard = ({
 // ============================================================================
 
 const ProfileDashboardScreen = ({ navigation, route }: any) => {
-  const authContext = React.useContext(AuthContext);
-  const [profile, setProfile] = useState<UserProfile>(MOCK_PROFILE);
-  const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS);
-  const [experience, setExperience] = useState<Experience[]>(MOCK_EXPERIENCE);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [experience, setExperience] = useState<Experience[]>([]);
   const [userPosts, setUserPosts] = useState<Post[]>([]);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -399,96 +384,92 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const scrollViewRef = useRef<ScrollView>(null);
 
   // Get userId from route params if viewing another user's profile
-  const paramUserId = route?.params?.userId;
-
-  useEffect(() => {
-    loadUserData();
-    loadUserPosts();
-  }, [paramUserId]);
+  const paramUserId = normalizeUserId(route?.params?.userId);
+  const paramUsername = toSafeString(route?.params?.username);
 
   useFocusEffect(
     useCallback(() => {
       loadUserData();
-      loadUserPosts();
     }, [paramUserId])
   );
 
   const loadUserData = async () => {
+    setProfileLoading(true);
+    setProfileError(null);
+
     try {
       // First get current logged-in user
       const userDataStr = await AsyncStorage.getItem('userData');
-      let loggedInUserId = null;
-      
+      let loggedInUserId: string | null = null;
+      let storedUserData: any = null;
+
       if (userDataStr) {
-        const userData = JSON.parse(userDataStr);
-        loggedInUserId = userData.public_id || userData.id || userData.user_id || userData.userId;
-        setCurrentUserId(loggedInUserId);
+        try {
+          storedUserData = JSON.parse(userDataStr);
+          loggedInUserId = normalizeUserId(
+            storedUserData?.public_id || storedUserData?.id || storedUserData?.user_id || storedUserData?.userId
+          );
+          if (loggedInUserId) {
+            setCurrentUserId(loggedInUserId);
+          }
+        } catch (parseError) {
+          await AsyncStorage.removeItem('userData');
+        }
       }
 
-      // Check if viewing another user's profile or own profile
-      if (paramUserId && paramUserId !== loggedInUserId) {
+      const viewingOtherUser = Boolean(paramUserId && paramUserId !== loggedInUserId);
+      const userIdToLoad = viewingOtherUser ? paramUserId : loggedInUserId;
+
+      if (viewingOtherUser && paramUserId) {
         // Viewing another user's profile
         setIsOwnProfile(false);
         setViewingUserId(paramUserId);
-        
-        // Fetch the other user's profile from API
+
         try {
           const otherUserProfile = await socialAPI.getPublicProfile(paramUserId);
-          
-          setProfile({
-            id: otherUserProfile.id || paramUserId || 'unknown',
-            username: otherUserProfile.username || 'user',
-            fullName: otherUserProfile.full_name || otherUserProfile.username || 'User',
-            email: otherUserProfile.email || '',
-            bio: otherUserProfile.bio || '',
-            tagline: '', // Not available in public profile
-            avatar: otherUserProfile.profile_picture || MOCK_PROFILE.avatar || '',
-            peers: Number(otherUserProfile.followers_count) || 0,
-            following: Number(otherUserProfile.following_count) || 0,
-          });
+          if (!otherUserProfile) {
+            throw new Error('Empty profile response');
+          }
+
+          setProfile(
+            normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
+              id: paramUserId,
+              username: toSafeString(otherUserProfile.username || paramUsername || 'user'),
+              tagline: '',
+            })
+          );
         } catch (error) {
-          console.error('Error loading other user profile:', error);
-          Alert.alert('Error', 'Failed to load user profile');
-          navigation.goBack();
+          setProfileError('Failed to load user profile');
+          setProfile(
+            normalizeProfile({ username: paramUsername || 'user' }, EMPTY_PROFILE, {
+              id: paramUserId,
+              tagline: '',
+            })
+          );
         }
       } else {
         // Viewing own profile
         setIsOwnProfile(true);
-        setViewingUserId(loggedInUserId);
-        
-        // Load user profile from storage or API
-        if (userDataStr) {
-          const userData = JSON.parse(userDataStr);
-          const userId = userData.id || userData.user_id || userData.userId;
+        setViewingUserId(userIdToLoad);
 
-          // Update profile with real data
-          setProfile({
-            id: userId || 'unknown',
-            username: userData.username || 'user',
-            fullName: userData.full_name || userData.username || 'User',
-            email: userData.email || '',
-            bio: userData.bio || MOCK_PROFILE.bio || '',
-            tagline: userData.tagline || MOCK_PROFILE.tagline || '',
-            avatar: userData.profile_photo || MOCK_PROFILE.avatar || '',
-            peers: Number(userData.followers_count) || 0,
-            following: Number(userData.following_count) || 0,
-          });
+        if (storedUserData) {
+          setProfile(normalizeProfile(storedUserData, EMPTY_PROFILE));
         } else {
           const userData = await authAPI.getCurrentUser();
-          await AsyncStorage.setItem('userData', JSON.stringify(userData));
-          setCurrentUserId(userData.id);
-
-          setProfile({
-            id: userData.id || 'unknown',
-            username: userData.username || 'user',
-            fullName: userData.full_name || userData.username || 'User',
-            email: userData.email || '',
-            bio: userData.bio || MOCK_PROFILE.bio || '',
-            tagline: userData.tagline || MOCK_PROFILE.tagline || '',
-            avatar: userData.profile_photo || MOCK_PROFILE.avatar || '',
-            peers: Number(userData.followers_count) || 0,
-            following: Number(userData.following_count) || 0,
-          });
+          if (userData) {
+            await AsyncStorage.setItem('userData', JSON.stringify(userData));
+            const resolvedUserId = normalizeUserId(
+              userData.public_id || userData.id || userData.user_id || userData.userId
+            );
+            if (resolvedUserId) {
+              setCurrentUserId(resolvedUserId);
+              setViewingUserId(resolvedUserId);
+            }
+            setProfile(normalizeProfile(userData, EMPTY_PROFILE));
+          } else {
+            setProfileError('Failed to load your profile');
+            setProfile(normalizeProfile({}, EMPTY_PROFILE));
+          }
         }
 
         // Load projects and experience from AsyncStorage (only for own profile)
@@ -496,34 +477,45 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         const experienceData = await AsyncStorage.getItem('user_experience');
 
         if (projectsData) {
-          setProjects(JSON.parse(projectsData));
+          try {
+            setProjects(JSON.parse(projectsData));
+          } catch (parseError) {}
         }
         if (experienceData) {
-          setExperience(JSON.parse(experienceData));
+          try {
+            setExperience(JSON.parse(experienceData));
+          } catch (parseError) {}
         }
       }
+
+      await loadUserPosts(userIdToLoad);
     } catch (error) {
-      console.error('Error loading user data:', error);
+      setProfileError('Failed to load profile');
+      setProfile(normalizeProfile({}, EMPTY_PROFILE));
+      await loadUserPosts(paramUserId || currentUserId);
     } finally {
-      setLoading(false);
+      setProfileLoading(false);
     }
   };
 
-  const loadUserPosts = async () => {
+  const loadUserPosts = async (userIdOverride?: string | null) => {
     try {
       setLoading(true);
       // Load posts for the user being viewed (own or other user)
-      const userIdToLoad = viewingUserId || currentUserId;
+      const userIdToLoad = userIdOverride || viewingUserId || currentUserId;
       if (userIdToLoad) {
         const response = await contentAPI.getUserPosts(userIdToLoad, 0, 20);
-        setUserPosts(response || []);
+        if (Array.isArray(response)) {
+          setUserPosts(response);
+        } else if (Array.isArray(response?.items)) {
+          setUserPosts(response.items);
+        } else {
+          setUserPosts([]);
+        }
       } else {
-        // Fallback to feed if no userId
-        const response = await contentAPI.getCursorFeed(null, 20);
-        setUserPosts(response.items || []);
+        setUserPosts([]);
       }
     } catch (error) {
-      console.error('Error loading user posts:', error);
       setUserPosts([]);
     } finally {
       setLoading(false);
@@ -533,9 +525,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await loadUserPosts();
-    } catch (error) {
-      console.error('Error refreshing:', error);
+      await loadUserPosts(viewingUserId || currentUserId);
     } finally {
       setRefreshing(false);
     }
@@ -561,7 +551,6 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         )
       );
     } catch (error) {
-      console.error('Error liking post:', error);
     }
   };
 
@@ -574,7 +563,6 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       await contentAPI.sharePost(post.id, 'connections');
       Alert.alert('Success', 'Post shared with your connections');
     } catch (error) {
-      console.error('Error sharing post:', error);
     }
   };
 
@@ -584,7 +572,6 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       Alert.alert('Success', 'Post reposted');
       await loadUserPosts();
     } catch (error) {
-      console.error('Error reposting:', error);
     }
   };
 
@@ -598,9 +585,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
             await contentAPI.deletePost(postId);
             setUserPosts((prev) => prev.filter((p) => p.id !== postId));
             Alert.alert('Success', 'Post deleted');
-          } catch (error) {
-            console.error('Error deleting post:', error);
-          }
+          } catch (error) {}
         },
         style: 'destructive',
       },
@@ -628,12 +613,29 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     }
   };
 
+  if (profileLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading profile...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const displayProfile = profile || normalizeProfile({}, EMPTY_PROFILE);
+  const displayName = displayProfile.fullName || displayProfile.username || 'User';
+  const displayTagline = displayProfile.tagline || '';
+  const displayBio = displayProfile.bio || '';
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.container}>
         {/* Header with background */}
         <View style={styles.headerBackground}>
-          <View style={styles.headerContent}>            {!isOwnProfile && (
+          <View style={styles.headerContent}>
+            {!isOwnProfile && (
               <TouchableOpacity
                 style={styles.backButton}
                 onPress={() => navigation.goBack()}
@@ -672,20 +674,26 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         >
           {/* Profile Header */}
           <ProfileHeader
-            name={profile.fullName || profile.username || 'User'}
-            tagline={profile.tagline || ''}
-            peers={profile.peers || 0}
-            following={profile.following || 0}
-            avatarUrl={profile.avatar}
+            name={displayName}
+            tagline={displayTagline}
+            peers={displayProfile.peers || 0}
+            following={displayProfile.following || 0}
+            avatarUrl={displayProfile.avatar}
           />
 
-          {/* Bio Card */}
-          {profile.bio && (
-            <BioCard title="Professional Bio" description={profile.bio} />
+          {profileError && (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>{profileError}</Text>
+            </View>
           )}
 
+          {/* Bio Card */}
+          {displayBio ? (
+            <BioCard title="Professional Bio" description={displayBio} />
+          ) : null}
+
           {/* Projects Carousel - Only show for own profile */}
-          {isOwnProfile && (
+          {isOwnProfile && projects.length > 0 && (
             <ProjectCarousel
               projects={projects}
               onProjectPress={(project) => {
@@ -695,7 +703,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           )}
 
           {/* Experience List - Only show for own profile */}
-          {isOwnProfile && (
+          {isOwnProfile && experience.length > 0 && (
             <ExperienceList
               title="Portfolio & Experience"
               experiences={experience}
@@ -805,8 +813,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingText: {
+    marginTop: spacing.sm,
+    fontSize: typography.bodySmall.fontSize,
+    color: colors.textSecondary,
+  },
   cvCardSpacer: {
     height: 120,
+  },
+  errorBanner: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.divider,
+  },
+  errorText: {
+    color: colors.textSecondary,
+    fontSize: typography.bodySmall.fontSize,
   },
 
   // Post Card Styles

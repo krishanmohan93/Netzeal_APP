@@ -2,7 +2,7 @@
  * Instagram-style Profile Screen
  * Production-ready with exact Instagram layout, sticky header, and full backend integration
  */
-import React, { useState, useCallback, useMemo, memo, useEffect, useContext } from 'react';
+import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,13 +20,11 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
-  Share,
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { authAPI, contentAPI, socialAPI } from '../services/api';
-import { AuthContext } from '../context/AuthContext';
 import { useFirebaseAuth } from '../context/FirebaseAuthContext';
 
 // ============================================================================
@@ -70,44 +68,10 @@ interface Highlight {
 type TabType = 'grid' | 'reels' | 'tagged';
 
 // ============================================================================
-// MOCK DATA
+// SAFE DEFAULTS
 // ============================================================================
 
-const MOCK_USER: User = {
-  id: '1',
-  username: 'john_doe_design',
-  fullName: 'John Doe',
-  avatarUrl: 'https://i.pravatar.cc/300?img=12',
-  isVerified: true,
-  followers: 124500,
-  following: 892,
-  posts: 347,
-  bio: '🎨 Digital Designer & Creative Director\n✨ Crafting beautiful experiences\n📍 San Francisco, CA',
-  category: 'Digital creator',
-  email: 'john@example.com',
-  externalUrl: 'https://johndoe.design',
-  isProfessional: true,
-  notifications: 3,
-  hasStory: true,
-  isPrivate: false,
-};
-
-const MOCK_POSTS: Post[] = Array.from({ length: 24 }, (_, i) => ({
-  id: `post-${i}`,
-  imageUrl: `https://picsum.photos/400/400?random=${i}`,
-  views: Math.floor(Math.random() * 50000) + 1000,
-  likes: Math.floor(Math.random() * 5000) + 100,
-  isReel: i % 5 === 0,
-  comments: Math.floor(Math.random() * 500) + 10,
-}));
-
-const MOCK_HIGHLIGHTS: Highlight[] = [
-  { id: 'new', title: 'New', coverUrl: '' },
-  { id: '1', title: 'Travel', coverUrl: 'https://picsum.photos/100/100?random=h1' },
-  { id: '2', title: 'Food', coverUrl: 'https://picsum.photos/100/100?random=h2' },
-  { id: '3', title: 'Work', coverUrl: 'https://picsum.photos/100/100?random=h3' },
-  { id: '4', title: 'Friends', coverUrl: 'https://picsum.photos/100/100?random=h4' },
-];
+const HIGHLIGHTS: Highlight[] = [];
 
 // ============================================================================
 // THEME & UTILITIES
@@ -121,6 +85,17 @@ const formatNumber = (num: number): string => {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
   return num.toString();
+};
+
+const normalizeUserId = (value: any): string | null => {
+  if (value === null || value === undefined) return null;
+  const id = String(value).trim();
+  return id.length > 0 ? id : null;
+};
+
+const normalizeUsername = (value: any, fallback = 'user'): string => {
+  const name = String(value ?? '').trim();
+  return name.length > 0 ? name : fallback;
 };
 
 const useTheme = () => {
@@ -155,6 +130,7 @@ const Avatar = memo(({ uri, size = 96, hasStory = false, onPress }: {
 }) => {
   const { colors } = useTheme();
   const gradientSize = size + 8;
+  const hasImage = Boolean(uri);
 
   return (
     <TouchableOpacity
@@ -180,12 +156,15 @@ const Avatar = memo(({ uri, size = 96, hasStory = false, onPress }: {
           borderWidth: 3,
           borderColor: colors.background,
           overflow: 'hidden',
+          backgroundColor: colors.border,
         }}>
-          <Image
-            source={{ uri }}
-            style={{ width: size, height: size }}
-            resizeMode="cover"
-          />
+          {hasImage ? (
+            <Image
+              source={{ uri }}
+              style={{ width: size, height: size }}
+              resizeMode="cover"
+            />
+          ) : null}
         </View>
       </View>
     </TouchableOpacity>
@@ -418,6 +397,7 @@ const PostTile = memo(({ post, onPress, onLongPress, onDoubleTap }: {
 }) => {
   const { colors } = useTheme();
   const [lastTap, setLastTap] = useState(0);
+  const hasImage = Boolean(post.imageUrl);
 
   const handlePress = useCallback(() => {
     const now = Date.now();
@@ -439,7 +419,11 @@ const PostTile = memo(({ post, onPress, onLongPress, onDoubleTap }: {
       accessibilityLabel={`Post with ${formatNumber(post.likes || 0)} likes`}
       accessibilityRole="imagebutton"
     >
-      <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      {hasImage ? (
+        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      ) : (
+        <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
+      )}
       {post.isReel && (
         <View style={styles.reelBadge}>
           <Ionicons name="play" size={20} color="#FFF" />
@@ -461,6 +445,7 @@ const ReelsTile = memo(({ post, onPress }: {
   onPress: () => void;
 }) => {
   const { colors } = useTheme();
+  const hasImage = Boolean(post.imageUrl);
 
   return (
     <TouchableOpacity
@@ -471,7 +456,11 @@ const ReelsTile = memo(({ post, onPress }: {
       accessibilityLabel={`Reel with ${formatNumber(post.views || 0)} views`}
       accessibilityRole="imagebutton"
     >
-      <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      {hasImage ? (
+        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      ) : (
+        <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
+      )}
       <View style={styles.reelOverlay}>
         <Ionicons name="play" size={24} color="#FFF" />
       </View>
@@ -488,6 +477,9 @@ const TaggedTile = memo(({ post, onPress }: {
   post: Post;
   onPress: () => void;
 }) => {
+  const { colors } = useTheme();
+  const hasImage = Boolean(post.imageUrl);
+
   return (
     <TouchableOpacity
       style={styles.tile}
@@ -497,7 +489,11 @@ const TaggedTile = memo(({ post, onPress }: {
       accessibilityLabel="Tagged post"
       accessibilityRole="imagebutton"
     >
-      <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      {hasImage ? (
+        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+      ) : (
+        <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
+      )}
       <View style={styles.tagBadge}>
         <Ionicons name="person-outline" size={16} color="#FFF" />
       </View>
@@ -665,11 +661,11 @@ export default function ProfileScreen({
   navigation?: any;
   route?: any;
 }) {
-  const { colors, isDark } = useTheme();
-  const authContext = useContext(AuthContext);
+  const { colors } = useTheme();
   const firebaseAuth = useFirebaseAuth();
-  const userId = route?.params?.userId;
-  const isCurrentUser = !userId; // If no userId provided, it's current user
+  const routeUserId = normalizeUserId(route?.params?.userId);
+  const routeUsername = normalizeUsername(route?.params?.username, 'user');
+  const isCurrentUser = !routeUserId; // If no userId provided, it's current user
 
   // State
   const [activeTab, setActiveTab] = useState<TabType>('grid');
@@ -685,34 +681,94 @@ export default function ProfileScreen({
   // Load user profile from backend
   useEffect(() => {
     loadProfile();
-  }, [userId]);
+  }, [routeUserId]);
 
   const loadProfile = async () => {
     try {
       setLoading(true);
-      const userData = await authAPI.getCurrentUser();
+      const userData = routeUserId
+        ? await socialAPI.getPublicProfile(routeUserId)
+        : await authAPI.getCurrentUser();
+
+      const resolvedUserId = normalizeUserId(
+        userData?.public_id || userData?.id || userData?.user_id || userData?.userId || routeUserId
+      );
+
+      const resolvedUsername = normalizeUsername(
+        userData?.username || userData?.user_name || routeUsername,
+        routeUsername
+      );
+
       setUser({
-        ...userData,
-        avatarUrl: userData.avatar_url || 'https://i.pravatar.cc/300?img=12',
-        followers: userData.followers_count || 0,
-        following: userData.following_count || 0,
-        posts: userData.posts_count || 0,
-        hasStory: false,
+        id: resolvedUserId || '',
+        username: resolvedUsername,
+        fullName: userData?.full_name || userData?.fullName || userData?.name || '',
+        avatarUrl:
+          userData?.avatar_url ||
+          userData?.profile_photo ||
+          userData?.profile_picture ||
+          userData?.avatar ||
+          '',
+        followers: Number(userData?.followers_count ?? userData?.followers ?? 0) || 0,
+        following: Number(userData?.following_count ?? userData?.following ?? 0) || 0,
+        posts: Number(userData?.posts_count ?? userData?.posts ?? 0) || 0,
+        bio: userData?.bio ?? '',
+        category: userData?.category ?? '',
+        email: userData?.email ?? '',
+        externalUrl: userData?.external_url ?? userData?.externalUrl ?? '',
+        isProfessional: Boolean(userData?.isProfessional ?? userData?.is_professional ?? false),
+        notifications: Number(userData?.notifications ?? 0) || 0,
+        hasStory: Boolean(userData?.hasStory ?? userData?.has_story ?? false),
+        isPrivate: Boolean(userData?.isPrivate ?? userData?.is_private ?? false),
+        isVerified: Boolean(userData?.isVerified ?? userData?.is_verified ?? false),
       });
-      
-      // Load user's posts
-      const postsData = await contentAPI.getUserPosts(userData.id);
-      setPosts(postsData.map((p: any) => ({
-        id: p.id,
-        imageUrl: p.images?.[0] || `https://picsum.photos/400/400?random=${p.id}`,
-        views: Math.floor(Math.random() * 50000) + 1000,
-        likes: p.likes_count || 0,
-        isReel: p.content_type === 'video',
-        comments: p.comments_count || 0,
-      })));
+
+      const postsOwnerId = resolvedUserId || routeUserId;
+      let postsData: any = [];
+      try {
+        if (postsOwnerId) {
+          postsData = await contentAPI.getUserPosts(postsOwnerId);
+        }
+      } catch (error) {
+        postsData = [];
+      }
+
+      const rawPosts = Array.isArray(postsData)
+        ? postsData
+        : Array.isArray(postsData?.items)
+          ? postsData.items
+          : [];
+
+      setPosts(
+        rawPosts.map((p: any) => ({
+          id: String(p.id),
+          imageUrl: p.images?.[0] || p.media_url || p.mediaUrl || '',
+          views: Number(p.views_count ?? p.views ?? 0) || 0,
+          likes: Number(p.likes_count ?? p.likes ?? 0) || 0,
+          isReel: p.content_type === 'video' || p.media_type === 'video',
+          comments: Number(p.comments_count ?? p.comments ?? 0) || 0,
+        }))
+      );
     } catch (error) {
-      console.error('Error loading profile:', error);
-      Alert.alert('Error', 'Failed to load profile');
+      setUser({
+        id: routeUserId || '',
+        username: routeUsername,
+        fullName: '',
+        avatarUrl: '',
+        followers: 0,
+        following: 0,
+        posts: 0,
+        bio: '',
+        category: '',
+        email: '',
+        externalUrl: '',
+        isProfessional: false,
+        notifications: 0,
+        hasStory: false,
+        isPrivate: false,
+        isVerified: false,
+      });
+      setPosts([]);
     } finally {
       setLoading(false);
     }
@@ -723,7 +779,7 @@ export default function ProfileScreen({
     setRefreshing(true);
     await loadProfile();
     setRefreshing(false);
-  }, [userId]);
+  }, [routeUserId]);
 
   const handleFollowToggle = useCallback(async () => {
     if (!user) return;
@@ -739,7 +795,6 @@ export default function ProfileScreen({
         Alert.alert('Success', `Now following ${user.username}`);
       }
     } catch (error) {
-      console.error('Error toggling follow:', error);
       Alert.alert('Error', 'Failed to update follow status');
     }
   }, [following, user]);
@@ -777,7 +832,6 @@ export default function ProfileScreen({
         setLikedPosts(prev => new Set(prev).add(post.id));
       }
     } catch (error) {
-      console.error('Error toggling like:', error);
     }
   }, [likedPosts]);
 
@@ -826,7 +880,6 @@ export default function ProfileScreen({
               await firebaseAuth.signOut();
               // Navigation will be handled automatically by auth state change
             } catch (error) {
-              console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to log out. Please try again.');
             }
           },
@@ -984,20 +1037,22 @@ export default function ProfileScreen({
       {user.isProfessional && <DashboardCard />}
 
       {/* Story Highlights */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.highlightsScroller}
-        contentContainerStyle={styles.highlightsContent}
-      >
-        {MOCK_HIGHLIGHTS.map((highlight) => (
-          <StoryHighlight
-            key={highlight.id}
-            highlight={highlight}
-            onPress={() => console.log('Highlight:', highlight.title)}
-          />
-        ))}
-      </ScrollView>
+      {HIGHLIGHTS.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.highlightsScroller}
+          contentContainerStyle={styles.highlightsContent}
+        >
+          {HIGHLIGHTS.map((highlight) => (
+            <StoryHighlight
+              key={highlight.id}
+              highlight={highlight}
+              onPress={() => console.log('Highlight:', highlight.title)}
+            />
+          ))}
+        </ScrollView>
+      ) : null}
 
       {/* Tab Bar */}
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
@@ -1005,24 +1060,10 @@ export default function ProfileScreen({
     );
   }, [user, isCurrentUser, following, activeTab, handleFollowToggle, handleEditProfile, handleShareProfile, handleMessage, colors]);
 
-  const ListEmptyComponent = useMemo(() => (
-    <View style={styles.emptyState}>
-      <Ionicons name="images-outline" size={64} color={colors.textSecondary} />
-      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-        {activeTab === 'grid' && 'No posts yet'}
-        {activeTab === 'reels' && 'No reels yet'}
-        {activeTab === 'tagged' && 'No tagged posts'}
-      </Text>
-      {isCurrentUser && activeTab === 'grid' && (
-        <TouchableOpacity
-          style={[styles.createPostButton, { backgroundColor: colors.primary }]}
-          onPress={handleNewPost}
-        >
-          <Text style={styles.createPostButtonText}>Create Your First Post</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  ), [activeTab, colors, isCurrentUser, handleNewPost]);
+  const ListEmptyComponent = useMemo(
+    () => <View style={styles.emptyState} />,
+    []
+  );
 
   // Render loading state
   if (loading) {
@@ -1398,21 +1439,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 64,
-  },
-  emptyText: {
-    fontSize: 16,
-    marginTop: 16,
-  },
-  createPostButton: {
-    marginTop: 24,
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  createPostButtonText: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '600',
   },
   loadingContainer: {
     flex: 1,
