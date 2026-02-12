@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     # OpenRouter (Alternative)
     OPENROUTER_API_KEY: str
     
-    # Qdrant (Vector Database for Semantic Search)
-    QDRANT_URL: str = "http://localhost:6333"
-    QDRANT_API_KEY: Optional[str] = None
+    # Qdrant Cloud (Vector Database for Semantic Search)
+    QDRANT_URL: str  # Required: Qdrant Cloud cluster URL (e.g., https://xxx.qdrant.io)
+    QDRANT_API_KEY: str  # Required: Qdrant Cloud API key
     QDRANT_COLLECTION_NAME: str = "netzeal_posts"
     VECTOR_SIZE: int = 384  # MiniLM-L6-v2 embedding size
     

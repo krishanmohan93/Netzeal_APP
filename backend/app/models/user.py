@@ -17,11 +17,12 @@ class User(Base):
     public_id = Column(UUID(as_uuid=True), unique=True, nullable=False, server_default=text("gen_random_uuid()"))
     email = Column(String(255), unique=True, index=True, nullable=False)
     username = Column(String(100), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=True)  # Nullable for Firebase phone auth users
+    hashed_password = Column(String(255), nullable=True)  # Nullable for OAuth users (Google)
     
-    # Firebase Authentication
-    firebase_uid = Column(String(128), unique=True, index=True, nullable=True)  # Firebase user ID
-    phone_number = Column(String(20), unique=True, index=True, nullable=True)  # Phone number for Firebase auth
+    # Authentication Provider
+    auth_provider = Column(String(50), default='email', nullable=False)  # 'email' or 'google'
+    provider_id = Column(String(255), unique=True, index=True, nullable=True)  # Google ID or provider identifier
+    google_refresh_token = Column(String(500), nullable=True)  # For refreshing Google access tokens
     
     # Profile Information
     full_name = Column(String(255))

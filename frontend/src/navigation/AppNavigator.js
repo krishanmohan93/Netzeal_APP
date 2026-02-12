@@ -1,11 +1,12 @@
 /**
- * Main App Navigation
+ * Main App Navigation - Email + Google OAuth
+ * Removed Firebase phone authentication and OTP screens
  */
+
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { AuthProvider } from '../context/AuthContext';
-import { FirebaseAuthProvider, useFirebaseAuth } from '../context/FirebaseAuthContext';
+import { AuthProvider, useAuth } from '../context/AuthContext';
 import { navigationRef } from '../services/navigationService';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
@@ -13,8 +14,6 @@ import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import BottomTabNavigator from './BottomTabNavigator';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
-import PhoneLoginScreen from '../screens/PhoneLoginScreen';
-import OTPVerificationScreen from '../screens/OTPVerificationScreen';
 import TermsOfServiceScreen from '../screens/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
 import { PostDetailScreen } from '../screens/PlaceholderScreens';
@@ -36,14 +35,14 @@ import LiveStreamScreen from '../ui/LiveStreamScreen';
 
 const Stack = createStackNavigator();
 
-// Navigation content component that uses Firebase Auth
+// Navigation content component that uses Auth
 const NavigationContent = () => {
-  const { isAuthenticated, initializing } = useFirebaseAuth();
+  const { isAuthenticated, loading } = useAuth();
 
-  if (initializing) {
+  if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#B8860B" />
+        <ActivityIndicator size="large" color="#2563eb" />
       </View>
     );
   }
@@ -51,15 +50,15 @@ const NavigationContent = () => {
   return (
     <NavigationContainer ref={navigationRef}>
       {!isAuthenticated ? (
+        // Auth Stack - Email + Google OAuth
         <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="PhoneLogin" component={PhoneLoginScreen} />
-          <Stack.Screen name="OTPVerification" component={OTPVerificationScreen} />
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
           <Stack.Screen name="TermsOfService" component={TermsOfServiceScreen} />
           <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
         </Stack.Navigator>
       ) : (
+        // App Stack - Main app
         <Stack.Navigator>
           <Stack.Screen
             name="Main"
@@ -104,49 +103,64 @@ const NavigationContent = () => {
           <Stack.Screen
             name="Help"
             component={HelpScreen}
-            options={{ title: 'Help & Support' }}
+            options={{ title: 'Help' }}
           />
           <Stack.Screen
             name="EditProfile"
             component={EditProfileScreen}
-            options={{ headerShown: false }}
+            options={{ title: 'Edit Profile' }}
           />
           <Stack.Screen
             name="ManageProjects"
             component={ManageProjectsScreen}
-            options={{ headerShown: false }}
+            options={{ title: 'Manage Projects' }}
           />
-          <Stack.Screen name="Camera" component={CameraScreen} options={{ title: 'Camera' }} />
-          <Stack.Screen name="MediaPicker" component={MediaPickerScreen} options={{ title: 'Pick Media' }} />
-          <Stack.Screen name="ImageEditor" component={ImageEditorScreen} options={{ title: 'Edit Image' }} />
-          <Stack.Screen name="ReelEditor" component={ReelEditorScreen} options={{ title: 'Edit Reel' }} />
-          <Stack.Screen name="LiveStream" component={LiveStreamScreen} options={{ title: 'Live Stream' }} />
-          <Stack.Screen name="TermsOfService" component={TermsOfServiceScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} options={{ headerShown: false }} />
+          {/* Media & Live */}
+          <Stack.Screen
+            name="Camera"
+            component={CameraScreen}
+            options={{ title: 'Camera' }}
+          />
+          <Stack.Screen
+            name="MediaPicker"
+            component={MediaPickerScreen}
+            options={{ title: 'Pick Media' }}
+          />
+          <Stack.Screen
+            name="ImageEditor"
+            component={ImageEditorScreen}
+            options={{ title: 'Edit Image' }}
+          />
+          <Stack.Screen
+            name="ReelEditor"
+            component={ReelEditorScreen}
+            options={{ title: 'Edit Reel' }}
+          />
+          <Stack.Screen
+            name="LiveStream"
+            component={LiveStreamScreen}
+            options={{ title: 'Live Stream' }}
+          />
         </Stack.Navigator>
       )}
     </NavigationContainer>
   );
 };
 
-// Main AppNavigator component with Firebase Auth Provider
-const AppNavigator = () => {
+// Main AppNavigator component with Auth Provider
+export default function AppNavigator() {
   return (
     <AuthProvider>
-      <FirebaseAuthProvider>
-        <NavigationContent />
-      </FirebaseAuthProvider>
+      <NavigationContent />
     </AuthProvider>
   );
-};
+}
 
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFDF7',
+    backgroundColor: '#fff',
   },
 });
-
-export default AppNavigator;

@@ -5,7 +5,7 @@
 import { Platform } from 'react-native';
 
 // Network Configuration
-const LOCAL_IP = '10.248.212.75'; // Your actual local IP (updated)
+const LOCAL_IP = '10.162.205.75'; // Your actual local IP (updated)
 const API_PORT = '8000';
 const TIMEOUT = 30000; // 30 seconds
 

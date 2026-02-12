@@ -1,26 +1,53 @@
 from __future__ import annotations
 from typing import List, Dict, Optional
 import os
+import logging
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Load Qdrant Cloud configuration from environment variables
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 POSTS_COLLECTION = os.getenv("QDRANT_COLLECTION_NAME", "netzeal_posts")
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "384"))  # aligns with MiniLM-L6-v2
 
 
 class QdrantService:
     def __init__(self):
-        """Initialize Qdrant client. Uses in-memory mode if server is not available."""
+        """Initialize Qdrant Cloud client with secure HTTPS connection."""
+        # Validate required environment variables
+        if not QDRANT_URL:
+            error_msg = "❌ QDRANT_URL environment variable is required for Qdrant Cloud connection"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        if not QDRANT_API_KEY:
+            error_msg = "❌ QDRANT_API_KEY environment variable is required for Qdrant Cloud connection"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
         try:
-            # Try to connect to Qdrant server
-            self.client = QdrantClient(url=QDRANT_URL, timeout=2)
-            self.client.get_collections()  # Test connection
-            print(f"✅ Connected to Qdrant server at {QDRANT_URL}")
+            # Connect to Qdrant Cloud with API key authentication
+            self.client = QdrantClient(
+                url=QDRANT_URL,
+                api_key=QDRANT_API_KEY,
+                timeout=10,  # Increased timeout for cloud connection
+                prefer_grpc=False  # Use HTTP/HTTPS for better compatibility
+            )
+            
+            # Verify connection by fetching collections
+            self.client.get_collections()
+            logger.info(f"✅ Successfully connected to Qdrant Cloud at {QDRANT_URL}")
+            print(f"✅ Successfully connected to Qdrant Cloud at {QDRANT_URL}")
+            
         except Exception as e:
-            print(f"⚠️ Qdrant server not available, using in-memory mode: {e}")
-            # Fallback to in-memory mode for development
-            self.client = QdrantClient(":memory:")
+            error_msg = f"❌ Failed to connect to Qdrant Cloud: {str(e)}"
+            logger.error(error_msg)
+            print(error_msg)
+            raise ConnectionError(f"Qdrant Cloud connection failed. Please verify QDRANT_URL and QDRANT_API_KEY are correct. Error: {str(e)}")
 
     def init_posts_collection(self):
         """Initialize Qdrant collection with multiple named vectors (caption, hashtags, image)."""

@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors, spacing, typography, borderRadius } from '../utils/theme';
-import { useFirebaseAuth } from '../context/FirebaseAuthContext';
+import { useAuth } from '../context/AuthContext';
 
 const SettingItem = ({ icon, title, subtitle, onPress, showArrow = true, rightComponent }) => (
   <TouchableOpacity style={styles.settingItem} onPress={onPress} disabled={!onPress}>
@@ -30,7 +30,7 @@ const SettingItem = ({ icon, title, subtitle, onPress, showArrow = true, rightCo
 );
 
 const SettingsScreen = ({ navigation }) => {
-  const firebaseAuth = useFirebaseAuth();
+  const auth = useAuth();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
   const [autoPlay, setAutoPlay] = useState(true);
@@ -61,8 +61,8 @@ const SettingsScreen = ({ navigation }) => {
         style: 'destructive',
         onPress: async () => {
           try {
-            // Use Firebase Auth context to sign out
-            await firebaseAuth.signOut();
+            // Use Auth context to logout
+            await auth.logout();
             // Navigation will be handled automatically by the auth state change
           } catch (error) {
             console.error('Logout error:', error);

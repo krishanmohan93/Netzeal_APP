@@ -16,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI, aiAPI } from '../services/api';
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
 import { AuthContext } from '../context/AuthContext';
-import { useFirebaseAuth } from '../context/FirebaseAuthContext';
+import { useAuth } from '../context/AuthContext';
 
 const ProfileScreen = ({ navigation }) => {
   const [user, setUser] = useState(null);
@@ -67,9 +67,9 @@ const ProfileScreen = ({ navigation }) => {
               await SecureStore.deleteItemAsync('userId').catch(() => {});
               await SecureStore.deleteItemAsync('phoneNumber').catch(() => {});
               
-              // Sign out from Firebase Auth - this will trigger navigation
-              const { signOut } = useFirebaseAuth();
-              await signOut();
+              // Logout using new Auth context
+              const { logout } = useAuth();
+              await logout();
               
               // Navigation will automatically switch to Login screen
               // because isAuthenticated will become false

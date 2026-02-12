@@ -14,8 +14,14 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    """Schema for user registration"""
-    password: str = Field(..., min_length=8)
+    """Schema for user registration via email"""
+    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+
+
+class UserLogin(BaseModel):
+    """Schema for email login"""
+    email: EmailStr
+    password: str
 
 
 class UserUpdate(BaseModel):
@@ -33,6 +39,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     """Schema for user response"""
     id: int
+    auth_provider: str
     bio: Optional[str] = None
     profile_photo: Optional[str] = None
     education: Optional[List[Dict]] = None
@@ -61,8 +68,24 @@ class Token(BaseModel):
     refresh_token: Optional[str] = None
     token_type: str = "bearer"
     expires_in: Optional[int] = None  # Expiration time in seconds
+    user: Optional[UserResponse] = None
 
 
 class TokenData(BaseModel):
     """Token payload data"""
     user_id: Optional[int] = None
+
+
+class GoogleAuthRequest(BaseModel):
+    """Schema for Google OAuth token"""
+    id_token: str
+
+
+class GoogleAuthResponse(BaseModel):
+    """Response after Google authentication"""
+    access_token: str
+    refresh_token: Optional[str] = None
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserResponse
+    is_new_user: bool

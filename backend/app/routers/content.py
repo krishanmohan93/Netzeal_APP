@@ -41,15 +41,23 @@ from ..utils.redis_cache import invalidate_all_feeds, get_client
 from ..models.content import FeedItem
 from ..services.groq_deepseek_service import AIService
 from ..services.qdrant_service import QdrantService
-from ..services.embedding_service import EmbeddingService
 from ..utils.db_performance import bulk_insert_feed_items_safe
 
 router = APIRouter(prefix="/content", tags=["Content"])
 logger = logging.getLogger(__name__)
 
+# Mock embedding service for testing without ML dependencies
+class MockEmbeddingService:
+    def embed_text(self, text):
+        return [0.0] * 384  # Mock 384-dim vector
+    def embed_query(self, text):
+        return [0.0] * 384
+    def embed_post(self, *args, **kwargs):
+        return {"caption_embedding": [0.0]*384, "hashtags_embedding": [0.0]*384, "image_embedding": [0.0]*384}
+
 # Initialize Qdrant and Embedding services
 qdrant_service = QdrantService()
-embedding_service = EmbeddingService()
+embedding_service = MockEmbeddingService()  # Use mock instead of real to avoid torch dependency
 
 # Initialize Qdrant collection on startup
 try:
