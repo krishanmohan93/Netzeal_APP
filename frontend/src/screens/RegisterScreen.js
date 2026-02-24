@@ -1,9 +1,9 @@
 /**
  * Email + Password Registration Screen
- * Modern, production-ready signup UI
+ * Premium, production-ready signup UI
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Animated,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -30,6 +31,20 @@ const RegisterScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
 
   const { register, error, clearError } = useAuth();
+
+  const entry = useRef(new Animated.Value(0)).current;
+  const slideUp = entry.interpolate({
+    inputRange: [0, 1],
+    outputRange: [18, 0],
+  });
+
+  useEffect(() => {
+    Animated.timing(entry, {
+      toValue: 1,
+      duration: 520,
+      useNativeDriver: true,
+    }).start();
+  }, [entry]);
 
   // Email validation
   const isValidEmail = (email) => {
@@ -80,322 +95,406 @@ const RegisterScreen = ({ navigation }) => {
     }
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (error) {
       Alert.alert('Error', error);
       clearError();
     }
-  }, [error]);
+  }, [error, clearError]);
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Header */}
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
+      <View style={styles.backgroundArt} pointerEvents="none">
+        <View style={styles.blobTop} />
+        <View style={styles.blobMid} />
+        <View style={styles.blobBottom} />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <Animated.View
+          style={[
+            styles.topRow,
+            {
+              opacity: entry,
+              transform: [{ translateY: slideUp }],
+            },
+          ]}
         >
-          <MaterialIcons name="arrow-back" size={24} color="#2563eb" />
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <MaterialIcons name="arrow-back" size={20} color={palette.ink} />
+            <Text style={styles.backText}>Back</Text>
+          </TouchableOpacity>
+        </Animated.View>
 
-        {/* Title */}
-        <View style={styles.headerContainer}>
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Join NetZeal today</Text>
-        </View>
+        <Animated.View
+          style={[
+            styles.hero,
+            {
+              opacity: entry,
+              transform: [{ translateY: slideUp }],
+            },
+          ]}
+        >
+          <Text style={styles.title}>Create your account</Text>
+          <Text style={styles.subtitle}>
+            Build credibility, showcase your work, and connect with top professionals.
+          </Text>
+        </Animated.View>
 
-        {/* Form */}
-        <View style={styles.formContainer}>
-          {/* Full Name */}
-          <View style={styles.inputContainer}>
-            <MaterialIcons
-              name="person"
-              size={20}
-              color="#999"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Full Name"
-              placeholderTextColor="#999"
-              value={fullName}
-              onChangeText={setFullName}
-              editable={!loading}
-            />
-          </View>
-
-          {/* Email */}
-          <View style={styles.inputContainer}>
-            <MaterialIcons
-              name="email"
-              size={20}
-              color="#999"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Email"
-              placeholderTextColor="#999"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              editable={!loading}
-            />
-          </View>
-
-          {/* Username */}
-          <View style={styles.inputContainer}>
-            <MaterialIcons
-              name="account-circle"
-              size={20}
-              color="#999"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Username"
-              placeholderTextColor="#999"
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-              editable={!loading}
-            />
-          </View>
-
-          {/* Password */}
-          <View style={styles.inputContainer}>
-            <MaterialIcons
-              name="lock"
-              size={20}
-              color="#999"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Password (min 8 characters)"
-              placeholderTextColor="#999"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              editable={!loading}
-            />
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-              style={styles.showPasswordButton}
-            >
-              <MaterialIcons
-                name={showPassword ? 'visibility' : 'visibility-off'}
-                size={20}
-                color="#666"
+        <Animated.View
+          style={[
+            styles.card,
+            {
+              opacity: entry,
+              transform: [{ translateY: slideUp }],
+            },
+          ]}
+        >
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Full name</Text>
+            <View style={styles.inputContainer}>
+              <MaterialIcons name="person" size={18} color={palette.muted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Your name"
+                placeholderTextColor={palette.placeholder}
+                value={fullName}
+                onChangeText={setFullName}
+                editable={!loading}
               />
-            </TouchableOpacity>
-          </View>
-
-          {/* Confirm Password */}
-          <View style={styles.inputContainer}>
-            <MaterialIcons
-              name="lock"
-              size={20}
-              color="#999"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Confirm Password"
-              placeholderTextColor="#999"
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              secureTextEntry={!showConfirmPassword}
-              editable={!loading}
-            />
-            <TouchableOpacity
-              onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-              style={styles.showPasswordButton}
-            >
-              <MaterialIcons
-                name={showConfirmPassword ? 'visibility' : 'visibility-off'}
-                size={20}
-                color="#666"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* Password Requirements */}
-          <View style={styles.requirementsContainer}>
-            <Text style={styles.requirementsTitle}>Password Requirements:</Text>
-            <View style={styles.requirement}>
-              <MaterialIcons
-                name={password.length >= 8 ? 'check-circle' : 'radio-button-unchecked'}
-                size={16}
-                color={password.length >= 8 ? '#10b981' : '#d1d5db'}
-              />
-              <Text style={styles.requirementText}>At least 8 characters</Text>
             </View>
           </View>
 
-          {/* Register Button */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Email address</Text>
+            <View style={styles.inputContainer}>
+              <MaterialIcons name="email" size={18} color={palette.muted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="name@company.com"
+                placeholderTextColor={palette.placeholder}
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                editable={!loading}
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Username</Text>
+            <View style={styles.inputContainer}>
+              <MaterialIcons
+                name="account-circle"
+                size={18}
+                color={palette.muted}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Choose a username"
+                placeholderTextColor={palette.placeholder}
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
+                editable={!loading}
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Password</Text>
+            <View style={styles.inputContainer}>
+              <MaterialIcons name="lock" size={18} color={palette.muted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Create a password"
+                placeholderTextColor={palette.placeholder}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                editable={!loading}
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                style={styles.showPasswordButton}
+              >
+                <MaterialIcons
+                  name={showPassword ? 'visibility' : 'visibility-off'}
+                  size={18}
+                  color={palette.muted}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Confirm password</Text>
+            <View style={styles.inputContainer}>
+              <MaterialIcons name="lock" size={18} color={palette.muted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter your password"
+                placeholderTextColor={palette.placeholder}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showConfirmPassword}
+                editable={!loading}
+              />
+              <TouchableOpacity
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={styles.showPasswordButton}
+              >
+                <MaterialIcons
+                  name={showConfirmPassword ? 'visibility' : 'visibility-off'}
+                  size={18}
+                  color={palette.muted}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.requirementsContainer}>
+            <MaterialIcons
+              name={password.length >= 8 ? 'check-circle' : 'info'}
+              size={16}
+              color={password.length >= 8 ? '#16A34A' : palette.muted}
+            />
+            <Text style={styles.requirementText}>Use at least 8 characters.</Text>
+          </View>
+
           <TouchableOpacity
-            style={[
-              styles.button,
-              styles.registerButton,
-              loading && styles.buttonDisabled,
-            ]}
+            style={[styles.primaryButton, loading && styles.buttonDisabled]}
             onPress={handleRegister}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Create Account</Text>
+              <Text style={styles.primaryButtonText}>Create account</Text>
             )}
           </TouchableOpacity>
 
-          {/* Login Link */}
-          <View style={styles.loginContainer}>
-            <Text style={styles.loginText}>Already have an account? </Text>
+          <View style={styles.loginRow}>
+            <Text style={styles.loginText}>Already have an account?</Text>
             <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-              <Text style={styles.loginLink}>Sign In</Text>
+              <Text style={styles.loginLink}>Sign in</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
 
-        {/* Terms */}
-        <Text style={styles.terms}>
-          By signing up, you agree to our Terms of Service and Privacy Policy
+        <Text style={styles.legalText}>
+          By creating an account you agree to our Terms and acknowledge our Privacy Policy.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 };
 
+const palette = {
+  background: '#F4F7FB',
+  card: '#FFFFFF',
+  primary: '#0A66C2',
+  primaryDark: '#084B90',
+  ink: '#0B1220',
+  muted: '#6B7280',
+  border: '#E2E8F0',
+  soft: '#F8FAFC',
+  placeholder: '#9CA3AF',
+  accentA: '#DBEAFE',
+  accentB: '#FCE7C6',
+  accentC: '#DCFCE7',
+};
+
+const fonts = {
+  heading: Platform.select({
+    ios: 'AvenirNext-DemiBold',
+    android: 'sans-serif-medium',
+    default: 'System',
+  }),
+  body: Platform.select({
+    ios: 'AvenirNext-Regular',
+    android: 'sans-serif',
+    default: 'System',
+  }),
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: palette.background,
+  },
+  backgroundArt: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  blobTop: {
+    position: 'absolute',
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: palette.accentA,
+    top: -80,
+    left: -60,
+    opacity: 0.75,
+  },
+  blobMid: {
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: palette.accentC,
+    top: 140,
+    right: -90,
+    opacity: 0.55,
+  },
+  blobBottom: {
+    position: 'absolute',
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: palette.accentB,
+    bottom: -140,
+    right: -80,
+    opacity: 0.7,
   },
   scrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 32,
+    paddingBottom: 40,
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
+  },
+  topRow: {
+    marginBottom: 12,
   },
   backButton: {
-    marginBottom: 20,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: palette.soft,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
-  headerContainer: {
-    marginBottom: 32,
+  backText: {
+    marginLeft: 6,
+    fontSize: 13,
+    fontFamily: fonts.heading,
+    color: palette.ink,
+  },
+  hero: {
+    marginBottom: 20,
   },
   title: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#000',
+    fontFamily: fonts.heading,
+    color: palette.ink,
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
+    fontFamily: fonts.body,
+    color: palette.muted,
+    lineHeight: 21,
   },
-  formContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
+  card: {
+    backgroundColor: palette.card,
+    borderRadius: 24,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-    marginBottom: 20,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  inputGroup: {
+    marginBottom: 14,
+  },
+  label: {
+    fontSize: 13,
+    fontFamily: fonts.heading,
+    color: palette.ink,
+    marginBottom: 6,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 8,
-    marginBottom: 12,
+    borderColor: palette.border,
+    borderRadius: 14,
     paddingHorizontal: 12,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: palette.soft,
   },
   inputIcon: {
-    marginRight: 12,
+    marginRight: 8,
   },
   input: {
     flex: 1,
     height: 48,
-    fontSize: 16,
-    color: '#000',
+    fontSize: 15,
+    fontFamily: fonts.body,
+    color: palette.ink,
   },
   showPasswordButton: {
-    padding: 8,
+    padding: 6,
   },
   requirementsContainer: {
-    marginBottom: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: '#f0f9ff',
-    borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: '#0ea5e9',
-  },
-  requirementsTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#0369a1',
-    marginBottom: 8,
-  },
-  requirement: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 16,
+    gap: 8,
   },
   requirementText: {
-    fontSize: 13,
-    color: '#0c4a6e',
-    marginLeft: 8,
+    fontSize: 12,
+    fontFamily: fonts.body,
+    color: palette.muted,
   },
-  button: {
-    height: 48,
-    borderRadius: 8,
+  primaryButton: {
+    height: 52,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    backgroundColor: palette.primary,
   },
-  registerButton: {
-    backgroundColor: '#2563eb',
-  },
-  buttonText: {
+  primaryButtonText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.heading,
   },
   buttonDisabled: {
     opacity: 0.6,
   },
-  loginContainer: {
+  loginRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 16,
+    gap: 6,
   },
   loginText: {
-    color: '#666',
-    fontSize: 14,
+    fontSize: 13,
+    fontFamily: fonts.body,
+    color: palette.muted,
   },
   loginLink: {
-    color: '#2563eb',
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontFamily: fonts.heading,
+    color: palette.primaryDark,
   },
-  terms: {
+  legalText: {
     textAlign: 'center',
+    marginTop: 18,
     fontSize: 12,
-    color: '#999',
+    fontFamily: fonts.body,
+    color: palette.muted,
     lineHeight: 18,
+    paddingHorizontal: 16,
   },
 });
 

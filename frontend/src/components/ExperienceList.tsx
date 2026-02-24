@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, borderRadius } from '../utils/theme';
+import { normalizeUri } from '../utils/media';
 
 interface Experience {
   id: string;
@@ -45,17 +46,19 @@ const ExperienceList: React.FC<ExperienceListProps> = ({
   experiences,
   onItemPress,
 }) => {
-  const renderExperienceItem = ({ item }: { item: Experience }) => (
-    <TouchableOpacity
-      style={styles.listItem}
-      onPress={() => onItemPress?.(item)}
-      activeOpacity={0.6}
-    >
+  const renderExperienceItem = ({ item }: { item: Experience }) => {
+    const iconUri = normalizeUri(item.iconUrl);
+    return (
+      <TouchableOpacity
+        style={styles.listItem}
+        onPress={() => onItemPress?.(item)}
+        activeOpacity={0.6}
+      >
       {/* Icon on Left */}
       <View style={styles.iconContainer}>
-        {item.iconUrl ? (
+        {iconUri ? (
           <Image
-            source={{ uri: item.iconUrl }}
+            source={{ uri: iconUri }}
             style={styles.iconImage}
             resizeMode="contain"
           />
@@ -83,8 +86,9 @@ const ExperienceList: React.FC<ExperienceListProps> = ({
 
       {/* Chevron Icon */}
       <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>

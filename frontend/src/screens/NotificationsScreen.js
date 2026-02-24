@@ -12,6 +12,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { notificationsAPI } from '../services/api';
 import { colors } from '../utils/theme';
+import { normalizeUri } from '../utils/media';
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
@@ -69,7 +70,7 @@ const NotificationsScreen = () => {
       onPress={() => handlePress(item)}
     >
       <Image
-        source={{ uri: item.sender?.profile_photo || 'https://via.placeholder.com/50' }}
+        source={{ uri: normalizeUri(item.sender?.profile_photo) || 'https://via.placeholder.com/50' }}
         style={styles.avatar}
       />
       <View style={styles.content}>

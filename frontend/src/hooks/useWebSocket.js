@@ -26,8 +26,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { AppState } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../config/environment';
+import { getAuthToken as getStoredAuthToken } from '../services/api';
 
 // WebSocket configuration
 const WS_CONFIG = {
@@ -82,8 +82,7 @@ export const useWebSocket = ({
    */
   const getAuthToken = async () => {
     try {
-      const token = await AsyncStorage.getItem('accessToken');
-      return token;
+      return await getStoredAuthToken();
     } catch (error) {
       console.error('❌ Failed to get auth token:', error);
       return null;

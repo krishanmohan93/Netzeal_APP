@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import timedelta
+import time
 from typing import Optional
 import os
 
@@ -40,11 +41,14 @@ from ..schemas.user import (
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# Google OAuth Configuration
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+# Google OAuth Configuration (use settings object to ensure proper .env loading)
+GOOGLE_CLIENT_ID = settings.GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET = settings.GOOGLE_CLIENT_SECRET
+GOOGLE_ALLOWED_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
-if not GOOGLE_CLIENT_ID:
+if GOOGLE_CLIENT_ID:
+    print("✅ Google OAuth configured successfully")
+else:
     print("⚠️  Warning: GOOGLE_CLIENT_ID not set. Google OAuth will not work.")
 
 
@@ -237,8 +241,8 @@ async def google_auth(token_request: GoogleAuthRequest, db: Session = Depends(ge
     4. Create or find user in database
     5. Return access token and user data
     
-    Frontend integration:
-    - Use @react-oauth/google or expo-google-app-auth
+    Frontend integration (Android):
+    - Use Google Sign-In SDK (native)
     - Get ID token from Google
     - POST to /api/v1/auth/google with {id_token: "..."}
     """
@@ -257,6 +261,36 @@ async def google_auth(token_request: GoogleAuthRequest, db: Session = Depends(ge
             GOOGLE_CLIENT_ID
         )
         
+        # Extra validation (defense-in-depth)
+        token_aud = idinfo.get("aud")
+        token_iss = idinfo.get("iss")
+        token_exp = idinfo.get("exp")
+        token_email_verified = idinfo.get("email_verified")
+
+        if token_aud != GOOGLE_CLIENT_ID:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google token: audience mismatch"
+            )
+
+        if token_iss not in GOOGLE_ALLOWED_ISSUERS:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google token: issuer mismatch"
+            )
+
+        if token_exp and int(token_exp) < int(time.time()):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google token: token expired"
+            )
+
+        if token_email_verified is False:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Google email not verified"
+            )
+
         # Extract user information from token
         google_id = idinfo.get('sub')
         email = idinfo.get('email')

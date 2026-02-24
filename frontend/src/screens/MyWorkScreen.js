@@ -1,7 +1,7 @@
 /**
  * My Work Screen - Network Messages & Connections
  */
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -11,101 +11,100 @@ import {
   StatusBar,
   Image,
   Platform,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import { colors, spacing, borderRadius, shadows } from '../utils/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colors, spacing } from '../utils/theme';
+import { chatAPI } from '../services/chatApi';
+import { timeAgo } from '../utils/formatters';
+import { normalizeUri } from '../utils/media';
 
-// Dummy conversation data
-const CONVERSATIONS = [
-  {
-    id: 1,
-    name: 'John Doe',
-    message: 'Sounds good!',
-    timestamp: '0.318.70',
-    avatar: 'JD',
-    verified: true,
-    unread: false,
-  },
-  {
-    id: 2,
-    name: 'John Doe',
-    message: 'Sounds good!',
-    timestamp: '0.918.75',
-    avatar: 'JD',
-    verified: false,
-    unread: false,
-  },
-  {
-    id: 3,
-    name: 'Sarah K.',
-    message: 'Project update',
-    timestamp: '0.315.70',
-    avatar: 'SK',
-    verified: false,
-    unread: false,
-    liked: true,
-  },
-  {
-    id: 4,
-    name: 'Sarah K.',
-    message: 'Project updatey week?',
-    timestamp: '0.317.78',
-    avatar: 'SK',
-    verified: false,
-    unread: false,
-  },
-  {
-    id: 5,
-    name: 'Alex Chen',
-    message: "Le's connect...",
-    timestamp: '0.7.17.78',
-    avatar: 'AC',
-    verified: false,
-    unread: false,
-    icons: true,
-  },
-  {
-    id: 6,
-    name: 'Alex Chen',
-    message: "Let's to stalde for ty week?",
-    timestamp: '0.315.75',
-    avatar: 'AC',
-    verified: false,
-    unread: false,
-  },
-];
+const getInitials = (name = '') => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'U';
+  const first = parts[0][0] || '';
+  const second = parts.length > 1 ? parts[1][0] : (parts[0][1] || '');
+  return (first + second).toUpperCase();
+};
 
-const ConversationItem = ({ conversation, onPress }) => {
+const getConversationTitle = (conversation, currentUserId) => {
+  if (conversation.title) return conversation.title;
+  const participants = conversation.participants || [];
+  const others = currentUserId
+    ? participants.filter(p => p.user_id !== currentUserId)
+    : participants;
+  if (conversation.type === 'direct') {
+    const other = others[0] || participants[0];
+    return other?.full_name || other?.username || 'Chat';
+  }
+  const names = others
+    .slice(0, 3)
+    .map(p => p.full_name || p.username)
+    .filter(Boolean)
+    .join(', ');
+  return names || 'Group Chat';
+};
+
+const getConversationAvatar = (conversation, currentUserId) => {
+  const participants = conversation.participants || [];
+  const others = currentUserId
+    ? participants.filter(p => p.user_id !== currentUserId)
+    : participants;
+  if (conversation.type === 'direct') {
+    const other = others[0] || participants[0];
+    return other?.profile_photo || null;
+  }
+  return null;
+};
+
+const ConversationItem = ({ conversation, currentUserId, onPress }) => {
+  const title = getConversationTitle(conversation, currentUserId);
+  const avatarUrl = normalizeUri(getConversationAvatar(conversation, currentUserId));
+  const initials = getInitials(title);
+  const lastMessage = conversation.last_message
+    ? `${conversation.last_message_sender ? `${conversation.last_message_sender}: ` : ''}${conversation.last_message}`
+    : 'No messages yet';
+  const timestamp = conversation.last_message_at ? timeAgo(conversation.last_message_at) : '';
+  const hasUnread = (conversation.unread_count || 0) > 0;
+  const isOnline = (conversation.participants || []).some(p => p.is_online);
+
   return (
     <TouchableOpacity style={styles.conversationItem} onPress={onPress}>
       <View style={styles.avatarContainer}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{conversation.avatar}</Text>
-        </View>
+        {avatarUrl ? (
+          <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        ) : (
+          <View style={[styles.avatar, styles.avatarPlaceholder]}>
+            <Text style={styles.avatarText}>{initials}</Text>
+          </View>
+        )}
+        {isOnline && <View style={styles.onlineIndicator} />}
       </View>
-      
+
       <View style={styles.conversationContent}>
         <View style={styles.conversationHeader}>
           <View style={styles.nameContainer}>
-            <Text style={styles.userName}>{conversation.name}</Text>
-            {conversation.verified && (
-              <Icon name="checkmark-circle" size={16} color={colors.primaryLight} style={styles.verifiedIcon} />
-            )}
+            <Text style={[styles.userName, hasUnread && styles.unreadText]} numberOfLines={1}>
+              {title}
+            </Text>
           </View>
-          <Text style={styles.timestamp}>{conversation.timestamp}</Text>
+          <Text style={styles.timestamp}>{timestamp}</Text>
         </View>
-        
+
         <View style={styles.messageRow}>
-          <Text style={styles.messagePreview} numberOfLines={1}>
-            {conversation.message}
+          <Text
+            style={[styles.messagePreview, hasUnread && styles.unreadText]}
+            numberOfLines={1}
+          >
+            {lastMessage}
           </Text>
-          {conversation.liked && (
-            <Icon name="heart" size={14} color={colors.textSecondary} style={styles.likeIcon} />
-          )}
-          {conversation.icons && (
-            <View style={styles.iconGroup}>
-              <Icon name="location" size={14} color={colors.textSecondary} />
-              <Icon name="attach" size={14} color={colors.textSecondary} style={styles.attachIcon} />
+          {hasUnread && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadCount}>
+                {conversation.unread_count > 99 ? '99+' : conversation.unread_count}
+              </Text>
             </View>
           )}
         </View>
@@ -115,19 +114,62 @@ const ConversationItem = ({ conversation, onPress }) => {
 };
 
 const MyWorkScreen = ({ navigation }) => {
-  const [menuVisible, setMenuVisible] = useState(false);
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState(null);
+
+  const loadCurrentUser = useCallback(async () => {
+    try {
+      const userDataStr = await AsyncStorage.getItem('user_data');
+      if (userDataStr) {
+        const userData = JSON.parse(userDataStr);
+        setCurrentUserId(userData.id);
+      }
+    } catch (err) {
+      console.error('Failed to load user data:', err);
+    }
+  }, []);
+
+  const loadConversations = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await chatAPI.getConversations();
+      setConversations(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+      setError('Failed to load conversations');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCurrentUser();
+    loadConversations();
+
+    const unsubscribe = navigation.addListener('focus', () => {
+      loadConversations();
+    });
+
+    return unsubscribe;
+  }, [navigation, loadCurrentUser, loadConversations]);
 
   const handleConversationPress = (conversation) => {
-    navigation.navigate('Chat', { 
+    const title = getConversationTitle(conversation, currentUserId);
+    navigation.navigate('Chat', {
       conversationId: conversation.id,
-      conversationTitle: conversation.name,
-      name: conversation.name 
+      conversationTitle: title,
+      name: title,
     });
   };
 
-  const toggleMenu = () => {
-    setMenuVisible(!menuVisible);
-  };
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadConversations();
+  }, [loadConversations]);
 
   const renderHeader = () => (
     <View style={styles.header}>
@@ -136,7 +178,7 @@ const MyWorkScreen = ({ navigation }) => {
         <TouchableOpacity style={styles.menuButton} onPress={() => navigation.navigate('CreatePost')}>
           <Icon name="add" size={28} color={colors.primary} />
         </TouchableOpacity>
-        
+
         <View style={styles.logoContainer}>
           <Image
             source={require('../../Logo_NetZeal.png')}
@@ -144,12 +186,12 @@ const MyWorkScreen = ({ navigation }) => {
             resizeMode="contain"
           />
         </View>
-        
+
         <TouchableOpacity style={styles.iconButton} onPress={() => navigation.navigate('Search')}>
           <Icon name="search" size={24} color={colors.primary} />
         </TouchableOpacity>
       </View>
-      
+
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>My Network</Text>
         <TouchableOpacity>
@@ -159,19 +201,55 @@ const MyWorkScreen = ({ navigation }) => {
     </View>
   );
 
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Icon name="alert-circle" size={48} color="#999" />
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={loadConversations}>
+          <Text style={styles.retryText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <FlatList
-        data={CONVERSATIONS}
+        data={conversations}
         keyExtractor={(item) => item.id.toString()}
         renderItem={({ item }) => (
           <ConversationItem
             conversation={item}
+            currentUserId={currentUserId}
             onPress={() => handleConversationPress(item)}
           />
         )}
         ListHeaderComponent={renderHeader}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
+          />
+        }
+        contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : null}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Icon name="chatbubbles-outline" size={64} color="#ccc" />
+            <Text style={styles.emptyText}>No conversations yet</Text>
+            <Text style={styles.emptySubtext}>Start chatting with someone!</Text>
+          </View>
+        }
       />
     </View>
   );
@@ -180,6 +258,12 @@ const MyWorkScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#F5F7FA',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#F5F7FA',
   },
   header: {
@@ -240,6 +324,7 @@ const styles = StyleSheet.create({
   },
   avatarContainer: {
     marginRight: spacing.sm,
+    position: 'relative',
   },
   avatar: {
     width: 50,
@@ -249,10 +334,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  avatarPlaceholder: {
+    backgroundColor: colors.primary,
+  },
   avatarText: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4CAF50',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   conversationContent: {
     flex: 1,
@@ -264,16 +363,13 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   nameContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
   },
   userName: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.text,
-  },
-  verifiedIcon: {
-    marginLeft: 4,
   },
   timestamp: {
     fontSize: 12,
@@ -288,15 +384,61 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
   },
-  likeIcon: {
+  unreadText: {
+    fontWeight: '700',
+    color: colors.text,
+  },
+  unreadBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
     marginLeft: spacing.xs,
   },
-  iconGroup: {
-    flexDirection: 'row',
-    marginLeft: spacing.xs,
+  unreadCount: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
-  attachIcon: {
-    marginLeft: 4,
+  emptyContainer: {
+    flex: 1,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#999',
+    marginTop: 16,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#ccc',
+    marginTop: 8,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#999',
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  retryText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

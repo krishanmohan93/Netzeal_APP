@@ -28,6 +28,7 @@ import CarouselMedia from '../components/CarouselMedia';
 import FullscreenMediaViewer from '../components/FullscreenMediaViewer';
 import { colors, spacing, borderRadius, shadows } from '../utils/theme';
 import { contentAPI, authAPI } from '../services/api';
+import { normalizeUri } from '../utils/media';
 
 const { width } = Dimensions.get('window');
 
@@ -116,7 +117,7 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
 
   // Handle both API format and dummy data format
   const hasCarousel = Array.isArray(post.media_items) && post.media_items.length > 0;
-  const mediaUrl = post.media_url || post.coverImage;
+  const mediaUrl = normalizeUri(post.media_url || post.coverImage);
   const mediaType = post.media_type || (post.type === 'reel' ? 'video' : 'image');
   const isVideo = mediaType === 'video' || mediaType === 'reel' || post.type === 'reel';
   // Prevent duplicate title rendering: if title exists, description excludes repeating caption start.
@@ -222,7 +223,7 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
         {/* Media Display (Carousel-aware) */}
         {hasCarousel ? (
           <CarouselMedia mediaItems={post.media_items} onOpenFullscreen={(idx) => onOpenFullscreen && onOpenFullscreen(idx)} />
-        ) : isVideo && !videoError ? (
+        ) : isVideo && mediaUrl && !videoError ? (
           <View style={styles.mediaContainer}>
             <Video
               ref={videoRef}
@@ -251,7 +252,7 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
               </View>
             </TouchableOpacity>
           </View>
-        ) : (
+        ) : mediaUrl ? (
           <TouchableOpacity onPress={() => onOpenFullscreen && onOpenFullscreen(0)}>
             <Image
               source={{ uri: mediaUrl }}
@@ -259,6 +260,11 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
               resizeMode="cover"
             />
           </TouchableOpacity>
+        ) : (
+          <View style={styles.mediaPlaceholder}>
+            <Icon name="image" size={48} color={colors.textLight} />
+            <Text style={styles.mediaPlaceholderText}>Media unavailable</Text>
+          </View>
         )}
 
         {/* Content Section */}
@@ -657,8 +663,11 @@ const HomeScreen = ({ navigation }) => {
             onOpenFullscreen={(idx) => {
               if (Array.isArray(item.media_items) && item.media_items.length) {
                 setFullscreen({ visible: true, items: item.media_items, index: idx });
-              } else if (item.media_url) {
-                setFullscreen({ visible: true, items: [{ id: item.id, url: item.media_url, media_type: item.media_type || 'image' }], index: 0 });
+              } else {
+                const safeUrl = normalizeUri(item.media_url);
+                if (safeUrl) {
+                  setFullscreen({ visible: true, items: [{ id: item.id, url: safeUrl, media_type: item.media_type || 'image' }], index: 0 });
+                }
               }
             }}
           />
@@ -837,6 +846,18 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 400,
     backgroundColor: colors.background,
+  },
+  mediaPlaceholder: {
+    width: '100%',
+    height: 400,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  mediaPlaceholderText: {
+    marginTop: 8,
+    color: colors.textSecondary,
+    fontSize: 14,
   },
   playOverlayCenter: {
     position: 'absolute',

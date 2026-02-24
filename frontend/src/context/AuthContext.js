@@ -7,6 +7,7 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG } from '../config/environment';
+import { setAuthToken, clearAuthTokens } from '../services/api';
 
 const AuthContext = createContext({});
 
@@ -15,6 +16,52 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [tokens, setTokens] = useState({ access: null, refresh: null });
   const [error, setError] = useState(null);
+
+  const getAuthUrls = (path) => {
+    const primary = `${API_CONFIG.BASE_URL}${path}`;
+    const fallbacks = (API_CONFIG.FALLBACK_URLS || []).map((url) => `${url}${path}`);
+    return [...new Set([primary, ...fallbacks])];
+  };
+
+  const fetchAuthWithFallback = async (path, options) => {
+    const urls = getAuthUrls(path);
+    let lastNetworkError = null;
+
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, options);
+        return response;
+      } catch (err) {
+        lastNetworkError = err;
+        console.warn(`⚠️ Network failed for ${url}`);
+      }
+    }
+
+    throw new Error(lastNetworkError?.message || 'Network error. Please check backend connection.');
+  };
+
+  const readResponseBody = async (response) => {
+    const contentType = response.headers?.get('content-type') || '';
+    const text = await response.text();
+
+    if (!text) {
+      return { data: null, text: '' };
+    }
+
+    if (contentType.includes('application/json')) {
+      try {
+        return { data: JSON.parse(text), text };
+      } catch (err) {
+        return { data: null, text };
+      }
+    }
+
+    try {
+      return { data: JSON.parse(text), text };
+    } catch (err) {
+      return { data: null, text };
+    }
+  };
 
   // Initialize auth on app start
   useEffect(() => {
@@ -29,6 +76,7 @@ export const AuthProvider = ({ children }) => {
       const savedUser = await AsyncStorage.getItem('user_data');
 
       if (savedAccessToken && savedUser) {
+        await setAuthToken(savedAccessToken, savedRefreshToken);
         setTokens({
           access: savedAccessToken,
           refresh: savedRefreshToken,
@@ -46,10 +94,7 @@ export const AuthProvider = ({ children }) => {
   // Save tokens and user to secure storage
   const saveSession = async (accessToken, refreshToken, userData) => {
     try {
-      await SecureStore.setItemAsync('access_token', accessToken);
-      if (refreshToken) {
-        await SecureStore.setItemAsync('refresh_token', refreshToken);
-      }
+      await setAuthToken(accessToken, refreshToken);
       await AsyncStorage.setItem('user_data', JSON.stringify(userData));
 
       setTokens({
@@ -68,8 +113,7 @@ export const AuthProvider = ({ children }) => {
   // Clear session
   const clearSession = async () => {
     try {
-      await SecureStore.deleteItemAsync('access_token');
-      await SecureStore.deleteItemAsync('refresh_token');
+      await clearAuthTokens();
       await AsyncStorage.removeItem('user_data');
 
       setTokens({ access: null, refresh: null });
@@ -87,8 +131,8 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_CONFIG.BASE_URL}/auth/register`,
+      const response = await fetchAuthWithFallback(
+        '/auth/register',
         {
           method: 'POST',
           headers: {
@@ -103,12 +147,13 @@ export const AuthProvider = ({ children }) => {
         }
       );
 
+      const { data, text } = await readResponseBody(response);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Registration failed');
+        throw new Error(data?.detail || data?.message || text || 'Registration failed');
       }
-
-      const data = await response.json();
+      if (!data) {
+        throw new Error('Invalid server response');
+      }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
       console.log('✅ Registration successful');
@@ -129,8 +174,8 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_CONFIG.BASE_URL}/auth/login`,
+      const response = await fetchAuthWithFallback(
+        '/auth/login',
         {
           method: 'POST',
           headers: {
@@ -143,12 +188,13 @@ export const AuthProvider = ({ children }) => {
         }
       );
 
+      const { data, text } = await readResponseBody(response);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Login failed');
+        throw new Error(data?.detail || data?.message || text || 'Login failed');
       }
-
-      const data = await response.json();
+      if (!data) {
+        throw new Error('Invalid server response');
+      }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
       console.log('✅ Login successful');
@@ -169,8 +215,8 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(
-        `${API_CONFIG.BASE_URL}/auth/google`,
+      const response = await fetchAuthWithFallback(
+        '/auth/google',
         {
           method: 'POST',
           headers: {
@@ -182,12 +228,13 @@ export const AuthProvider = ({ children }) => {
         }
       );
 
+      const { data, text } = await readResponseBody(response);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Google sign-in failed');
+        throw new Error(data?.detail || data?.message || text || 'Google sign-in failed');
       }
-
-      const data = await response.json();
+      if (!data) {
+        throw new Error('Invalid server response');
+      }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
       console.log('✅ Google sign-in successful', {
@@ -216,8 +263,8 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      const response = await fetch(
-        `${API_CONFIG.BASE_URL}/auth/refresh`,
+      const response = await fetchAuthWithFallback(
+        '/auth/refresh',
         {
           method: 'POST',
           headers: {
@@ -229,11 +276,13 @@ export const AuthProvider = ({ children }) => {
         }
       );
 
+      const { data, text } = await readResponseBody(response);
       if (!response.ok) {
-        throw new Error('Failed to refresh token');
+        throw new Error(data?.detail || data?.message || text || 'Failed to refresh token');
       }
-
-      const data = await response.json();
+      if (!data) {
+        throw new Error('Invalid server response');
+      }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
       console.log('✅ Token refreshed');
@@ -250,7 +299,7 @@ export const AuthProvider = ({ children }) => {
     try {
       // Call logout endpoint on backend
       if (tokens.access) {
-        await fetch(`${API_CONFIG.BASE_URL}/auth/logout`, {
+        await fetchAuthWithFallback('/auth/logout', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${tokens.access}`,

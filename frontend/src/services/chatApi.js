@@ -2,8 +2,8 @@
  * Chat and messaging API service
  */
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../config/environment';
+import { getAuthToken, getRefreshToken, setAuthToken, clearAuthTokens } from './api';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -14,7 +14,7 @@ const apiClient = axios.create({
 
 // Add auth token to requests
 apiClient.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('access_token');
+  const token = await getAuthToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -31,19 +31,19 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true;
       
       try {
-        const refreshToken = await AsyncStorage.getItem('refresh_token');
+        const refreshToken = await getRefreshToken();
         const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
           refresh_token: refreshToken
         });
         
-        const { access_token } = response.data;
-        await AsyncStorage.setItem('access_token', access_token);
+        const { access_token, refresh_token: new_refresh_token } = response.data;
+        await setAuthToken(access_token, new_refresh_token ?? refreshToken);
         
         originalRequest.headers.Authorization = `Bearer ${access_token}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
         // Refresh failed - redirect to login
-        await AsyncStorage.multiRemove(['access_token', 'refresh_token']);
+        await clearAuthTokens();
         return Promise.reject(refreshError);
       }
     }

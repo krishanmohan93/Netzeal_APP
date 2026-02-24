@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
 import { authAPI } from '../services/api';
+import { normalizeUri } from '../utils/media';
 
 const EditProfileScreen = ({ navigation, route }) => {
     const [loading, setLoading] = useState(false);
@@ -172,6 +173,8 @@ const EditProfileScreen = ({ navigation, route }) => {
         );
     }
 
+    const profilePhotoUri = normalizeUri(profileData.profile_photo);
+
     return (
         <SafeAreaView style={styles.safeArea} edges={['bottom']}>
             <View style={styles.container}>
@@ -200,9 +203,9 @@ const EditProfileScreen = ({ navigation, route }) => {
                         <Text style={styles.sectionTitle}>Profile Picture</Text>
                         <View style={styles.profilePictureContainer}>
                             <TouchableOpacity onPress={handlePickImage} style={styles.profilePictureWrapper}>
-                                {profileData.profile_photo ? (
+                                {profilePhotoUri ? (
                                     <Image
-                                        source={{ uri: profileData.profile_photo }}
+                                        source={{ uri: profilePhotoUri }}
                                         style={styles.profilePicture}
                                     />
                                 ) : (

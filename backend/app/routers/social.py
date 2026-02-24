@@ -15,9 +15,29 @@ from ..services.qdrant_service import QdrantService
 
 router = APIRouter(prefix="/social", tags=["Social Networking"])
 
-# Initialize services for AI-powered matching
+# Lazy initialization of services for AI-powered matching
 embedding_service = EmbeddingService()
-qdrant_service = QdrantService()
+_qdrant_service = None
+_qdrant_init_attempted = False
+
+def get_qdrant_service():
+    """Lazy initialization of Qdrant service with error handling."""
+    global _qdrant_service, _qdrant_init_attempted
+    
+    if _qdrant_service is not None:
+        return _qdrant_service
+    
+    if _qdrant_init_attempted:
+        return None
+    
+    _qdrant_init_attempted = True
+    
+    try:
+        _qdrant_service = QdrantService()
+        return _qdrant_service
+    except Exception as e:
+        print(f"⚠️ Qdrant initialization failed in social router: {e}")
+        return None
 
 
 @router.post("/follow/{user_id}")
@@ -267,7 +287,32 @@ async def ai_powered_user_matching(
             raise HTTPException(status_code=500, detail="Failed to generate user profile embedding")
         
         # Search for posts by other users with similar content
-        search_results = qdrant_service.search_posts(user_embedding, limit=limit * 5)
+        qdrant = get_qdrant_service()
+        if not qdrant:
+            # Qdrant not available, return popular users instead
+            popular_users = db.query(User).filter(
+                User.id != current_user.id
+            ).order_by(desc(User.id)).limit(limit).all()
+            
+            return {
+                "message": "AI matching temporarily unavailable. Showing popular users.",
+                "users": [
+                    {
+                        "id": u.id,
+                        "username": u.username,
+                        "full_name": u.full_name,
+                        "profile_photo": u.profile_photo,
+                        "bio": u.bio,
+                        "interests": u.interests or [],
+                        "skills": u.skills or [],
+                        "match_score": 0.0
+                    }
+                    for u in popular_users
+                ],
+                "count": len(popular_users)
+            }
+        
+        search_results = qdrant.search_posts(user_embedding, limit=limit * 5)
         
         # Extract unique author IDs (excluding current user)
         candidate_user_ids = set()

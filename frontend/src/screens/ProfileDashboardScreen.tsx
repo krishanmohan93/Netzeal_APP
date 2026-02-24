@@ -31,6 +31,7 @@ import FullscreenMediaViewer from '../components/FullscreenMediaViewer';
 
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
 import { contentAPI, authAPI, socialAPI } from '../services/api';
+import { normalizeUri } from '../utils/media';
 
 
 // ============================================================================
@@ -163,7 +164,7 @@ const PostCard = ({
   const videoRef = useRef(null);
 
   const hasCarousel = Array.isArray(post.media_items) && post.media_items.length > 0;
-  const mediaUrl = post.media_url || post.coverImage || '';
+  const mediaUrl = normalizeUri(post.media_url || post.coverImage || '');
   const mediaType = post.media_type || (post.type === 'reel' ? 'video' : 'image');
   const isVideo = mediaType === 'video' || mediaType === 'reel' || post.type === 'reel';
   const rawCaption = post.caption || post.description || '';
@@ -277,12 +278,17 @@ const PostCard = ({
             mediaItems={post.media_items}
             onOpenFullscreen={(idx) => onOpenFullscreen && onOpenFullscreen(idx)}
           />
-        ) : (
+        ) : mediaUrl ? (
           <Image
             source={{ uri: mediaUrl }}
             style={styles.mediaFull}
             resizeMode="cover"
           />
+        ) : (
+          <View style={styles.mediaPlaceholder}>
+            <Icon name="image" size={40} color={colors.textLight} />
+            <Text style={styles.mediaPlaceholderText}>Media unavailable</Text>
+          </View>
         )}
 
         {/* Content Section */}
@@ -602,14 +608,21 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
 
   const handleOpenFullscreen = (index: number) => {
     if (userPosts.length > 0) {
-      setFullscreen({
-        visible: true,
-        items: userPosts.map((p) => ({
-          uri: p.media_url,
-          type: p.media_type || 'image',
-        })),
-        index,
-      });
+      const items = userPosts
+        .map((p) => ({
+          id: p.id,
+          url: normalizeUri(p.media_url),
+          media_type: p.media_type || 'image',
+        }))
+        .filter((item) => item.url);
+      if (items.length > 0) {
+        const safeIndex = Math.min(index, items.length - 1);
+        setFullscreen({
+          visible: true,
+          items,
+          index: safeIndex,
+        });
+      }
     }
   };
 
@@ -911,6 +924,18 @@ const styles = StyleSheet.create({
   mediaFull: {
     width: '100%',
     height: 250,
+  },
+  mediaPlaceholder: {
+    width: '100%',
+    height: 250,
+    backgroundColor: colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaPlaceholderText: {
+    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    fontSize: typography.caption.fontSize,
   },
   contentSection: {
     paddingHorizontal: spacing.md,

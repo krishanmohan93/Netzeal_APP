@@ -3,6 +3,7 @@ import { View, Image, FlatList, StyleSheet, TouchableOpacity, Dimensions, Modal,
 import { Video, ResizeMode } from 'expo-av';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors, spacing } from '../utils/theme';
+import { normalizeUri } from '../utils/media';
 
 const { width } = Dimensions.get('window');
 
@@ -24,12 +25,13 @@ const CarouselMedia = ({ mediaItems = [], onOpenFullscreen }) => {
   const renderItem = ({ item, index }) => {
     const isVideo = item.media_type === 'VIDEO' || item.media_type === 'video';
     const isPdf = item.media_type === 'PDF' || item.media_type === 'pdf';
+    const mediaUri = normalizeUri(item.url || item.uri);
     return (
       <TouchableOpacity activeOpacity={0.8} onPress={() => onOpenFullscreen && onOpenFullscreen(index)}>
-        {isVideo ? (
+        {isVideo && mediaUri ? (
           <Video
             ref={(r) => (videoRefs.current[index] = r)}
-            source={{ uri: item.url }}
+            source={{ uri: mediaUri }}
             style={styles.media}
             resizeMode={ResizeMode.COVER}
             isLooping
@@ -40,8 +42,13 @@ const CarouselMedia = ({ mediaItems = [], onOpenFullscreen }) => {
             <Icon name="document" size={48} color={colors.primary} />
             <Text style={styles.pdfText}>PDF</Text>
           </View>
+        ) : mediaUri ? (
+          <Image source={{ uri: mediaUri }} style={styles.media} resizeMode="cover" />
         ) : (
-          <Image source={{ uri: item.url }} style={styles.media} resizeMode="cover" />
+          <View style={[styles.media, styles.missingMedia]}>
+            <Icon name="image" size={48} color="#9AA0A6" />
+            <Text style={styles.missingText}>Media unavailable</Text>
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -108,6 +115,16 @@ const styles = StyleSheet.create({
   pdfText: {
     marginTop: 8,
     color: '#FFF'
+  },
+  missingMedia: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#111'
+  },
+  missingText: {
+    marginTop: 8,
+    color: '#9AA0A6',
+    fontSize: 12
   }
 });
 

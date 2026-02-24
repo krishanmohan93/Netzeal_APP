@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, Dimensions } from 'react-native';
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
+import { normalizeUri } from '../utils/media';
 
 interface ProfileHeaderProps {
   name: string;
@@ -25,14 +26,15 @@ const ProfileHeader: React.FC<ProfileHeaderProps> = ({
 }) => {
   const safeName = (name || 'User').trim();
   const safeTagline = (tagline || '').trim();
+  const avatarUri = normalizeUri(avatarUrl);
 
   return (
     <View style={styles.container}>
       {/* Circular Profile Photo */}
       <View style={styles.avatarWrapper}>
-        {avatarUrl ? (
+        {avatarUri ? (
           <Image
-            source={{ uri: avatarUrl }}
+            source={{ uri: avatarUri }}
             style={styles.avatarImage}
           />
         ) : (

@@ -17,6 +17,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius, typography } from '../utils/theme';
 import api from '../services/api';
+import { normalizeUri } from '../utils/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -103,18 +104,26 @@ const SearchScreen = ({ navigation }) => {
   };
 
   // RENDERERS
+  const getValidUri = (...candidates) => {
+    for (const candidate of candidates) {
+      const uri = normalizeUri(candidate);
+      if (uri) return uri;
+    }
+    return null;
+  };
 
   const renderUserItem = ({ item }) => {
     // Handle potential data mismatch
     const name = item.full_name || item.username || 'User';
     const username = item.username || '';
     const initials = name.substring(0, 2).toUpperCase();
+    const avatarUri = getValidUri(item.profile_photo);
 
     return (
       <TouchableOpacity style={styles.userItem} onPress={() => handleUserPress(item)}>
         <View style={styles.avatarContainer}>
-          {item.profile_photo ? (
-            <Image source={{ uri: item.profile_photo }} style={styles.avatar} />
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri }} style={styles.avatar} />
           ) : (
             <View style={[styles.avatar, styles.placeholderAvatar]}>
               <Text style={styles.placeholderText}>{initials}</Text>
@@ -132,7 +141,8 @@ const SearchScreen = ({ navigation }) => {
 
   const renderPostGridItem = ({ item }) => {
     // Determine image source
-    const imageUrl = item.thumbnail_url || item.image_url || (item.media_urls && item.media_urls[0]) || item.media_url;
+    const firstMedia = Array.isArray(item.media_urls) ? item.media_urls[0] : null;
+    const imageUrl = getValidUri(item.thumbnail_url, item.image_url, firstMedia, item.media_url);
 
     return (
       <TouchableOpacity style={styles.gridItem} onPress={() => handlePostPress(item)}>
@@ -154,7 +164,8 @@ const SearchScreen = ({ navigation }) => {
 
   const renderProjectItem = ({ item }) => {
     // Projects might look like LinkedIn cards
-    const imageUrl = item.thumbnail_url || (item.media_urls && item.media_urls[0]);
+    const firstMedia = Array.isArray(item.media_urls) ? item.media_urls[0] : null;
+    const imageUrl = getValidUri(item.thumbnail_url, firstMedia);
 
     return (
       <TouchableOpacity style={styles.projectItem} onPress={() => handlePostPress(item)}>

@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { contentAPI } from '../services/api';
 import { API_BASE_URL } from '../config/environment';
+import { getAuthToken } from '../services/api';
 
 export const useCursorFeed = ({ autoLoad = true, onError = null } = {}) => {
   const [items, setItems] = useState([]);
@@ -115,50 +116,67 @@ export const useCursorFeed = ({ autoLoad = true, onError = null } = {}) => {
    * Setup WebSocket for real-time updates
    */
   useEffect(() => {
-    const wsUrl = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://').replace('/api/v1', '/ws');
-    
-    console.log('🔌 Connecting WebSocket:', wsUrl);
-    
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    let ws;
+    let cancelled = false;
 
-      ws.onopen = () => {
-        console.log('✅ WebSocket connected');
-      };
+    const connect = async () => {
+      const token = await getAuthToken();
+      if (!token || cancelled) {
+        return;
+      }
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('📨 WebSocket message:', data);
-          
-          if (data.type === 'NEW_POST' && data.post_id) {
-            // Optionally fetch and prepend the new post
-            // For now, just trigger a refresh or show notification
-            console.log('🆕 New post published:', data.post_id);
-            // You could implement: refresh() or fetch single post and prepend
+      const wsUrlBase = API_BASE_URL
+        .replace('http://', 'ws://')
+        .replace('https://', 'wss://')
+        .replace('/api/v1', '/ws');
+      const wsUrl = `${wsUrlBase}?token=${encodeURIComponent(token)}`;
+
+      console.log('🔌 Connecting WebSocket:', wsUrlBase);
+
+      try {
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          console.log('✅ WebSocket connected');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log('📨 WebSocket message:', data);
+
+            if (data.type === 'NEW_POST' && data.post_id) {
+              // Optionally fetch and prepend the new post
+              // For now, just trigger a refresh or show notification
+              console.log('🆕 New post published:', data.post_id);
+              // You could implement: refresh() or fetch single post and prepend
+            }
+          } catch (err) {
+            console.error('Error parsing WebSocket message:', err);
           }
-        } catch (err) {
-          console.error('Error parsing WebSocket message:', err);
-        }
-      };
+        };
 
-      ws.onerror = (error) => {
-        console.error('❌ WebSocket error:', error);
-      };
+        ws.onerror = (error) => {
+          console.error('❌ WebSocket error:', error);
+        };
 
-      ws.onclose = () => {
-        console.log('🔌 WebSocket closed');
-      };
+        ws.onclose = () => {
+          console.log('🔌 WebSocket closed');
+        };
+      } catch (err) {
+        console.error('Failed to create WebSocket:', err);
+      }
+    };
 
-      return () => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close();
-        }
-      };
-    } catch (err) {
-      console.error('Failed to create WebSocket:', err);
-    }
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
   }, []);
 
   /**

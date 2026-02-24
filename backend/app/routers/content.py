@@ -55,16 +55,32 @@ class MockEmbeddingService:
     def embed_post(self, *args, **kwargs):
         return {"caption_embedding": [0.0]*384, "hashtags_embedding": [0.0]*384, "image_embedding": [0.0]*384}
 
-# Initialize Qdrant and Embedding services
-qdrant_service = QdrantService()
+# Lazy initialization of Qdrant and Embedding services
+_qdrant_service = None
+_qdrant_init_attempted = False
 embedding_service = MockEmbeddingService()  # Use mock instead of real to avoid torch dependency
 
-# Initialize Qdrant collection on startup
-try:
-    qdrant_service.init_posts_collection()
-    print("✅ Qdrant posts collection initialized")
-except Exception as e:
-    print(f"⚠️ Qdrant initialization warning: {e}")
+def get_qdrant_service():
+    """Lazy initialization of Qdrant service with error handling."""
+    global _qdrant_service, _qdrant_init_attempted
+    
+    if _qdrant_service is not None:
+        return _qdrant_service
+    
+    if _qdrant_init_attempted:
+        return None
+    
+    _qdrant_init_attempted = True
+    
+    try:
+        _qdrant_service = QdrantService()
+        _qdrant_service.init_posts_collection()
+        print("✅ Qdrant posts collection initialized")
+        return _qdrant_service
+    except Exception as e:
+        print(f"⚠️ Qdrant initialization failed: {e}")
+        print("   Semantic search features will be disabled")
+        return None
 
 
 def _get_allowed_author_ids(db: Session, current_user: User) -> List[int]:
@@ -146,9 +162,9 @@ async def create_post(
 
 
 
-@router.get("/users/{public_id}/posts", response_model=List[PostResponse])
+@router.get("/users/{user_identifier}/posts", response_model=List[PostResponse])
 async def get_user_posts_by_id(
-    public_id: str,
+    user_identifier: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
@@ -157,7 +173,17 @@ async def get_user_posts_by_id(
     """Get posts for a specific user profile"""
     
     # Resolve user
-    user = db.query(User).filter(User.public_id == public_id).first()
+    user = None
+    try:
+        from uuid import UUID
+        user_uuid = UUID(user_identifier)
+        user = db.query(User).filter(User.public_id == user_uuid).first()
+    except Exception:
+        user = None
+
+    if not user and user_identifier.isdigit():
+        user = db.query(User).filter(User.id == int(user_identifier)).first()
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -749,8 +775,10 @@ async def upload_instagram_post(
             "author_username": current_user.username,
             "created_at": new_post.created_at.isoformat()
         }
-        qdrant_service.upsert_post(new_post.id, current_user.id, vectors, payload)
-        print(f"✅ Post indexed in Qdrant: {new_post.id}")
+        qdrant = get_qdrant_service()
+        if qdrant:
+            qdrant.upsert_post(new_post.id, current_user.id, vectors, payload)
+            print(f"✅ Post indexed in Qdrant: {new_post.id}")
     except Exception as e:
         print(f"⚠️ Qdrant indexing failed for post {new_post.id}: {e}")
 
@@ -916,8 +944,10 @@ async def upload_multiple_media_posts(
                 "author_username": current_user.username,
                 "created_at": post.created_at.isoformat()
             }
-            qdrant_service.upsert_post(post.id, current_user.id, vectors, payload)
-            print(f"✅ Post indexed in Qdrant: {post.id}")
+            qdrant = get_qdrant_service()
+            if qdrant:
+                qdrant.upsert_post(post.id, current_user.id, vectors, payload)
+                print(f"✅ Post indexed in Qdrant: {post.id}")
         except Exception as e:
             print(f"⚠️ Qdrant indexing failed for post {post.id}: {e}")
 
@@ -1517,6 +1547,15 @@ async def semantic_search_posts(
             raise HTTPException(status_code=400, detail="Failed to generate query embedding")
         
         # Search Qdrant for similar posts
+        qdrant_service = get_qdrant_service()
+        if not qdrant_service:
+            return {
+                "query": q,
+                "results": [],
+                "count": 0,
+                "message": "Semantic search temporarily unavailable"
+            }
+
         search_results = qdrant_service.search_posts(query_vector, limit=limit)
         
         # Retrieve full post details from database
@@ -1590,6 +1629,15 @@ async def find_similar_posts(
             raise HTTPException(status_code=400, detail="Failed to generate post embedding")
         
         # Search for similar posts (excluding the source post)
+        qdrant_service = get_qdrant_service()
+        if not qdrant_service:
+            return {
+                "post_id": post_id,
+                "similar_posts": [],
+                "count": 0,
+                "message": "Similar-posts service temporarily unavailable"
+            }
+
         search_results = qdrant_service.search_posts(query_vector, limit=limit + 1)
         
         # Filter out the source post
@@ -1902,7 +1950,9 @@ async def upload_multi_media_single_post(
             "author_username": current_user.username,
             "created_at": new_post.created_at.isoformat()
         }
-        qdrant_service.upsert_post(new_post.id, current_user.id, vectors, payload)
+        qdrant = get_qdrant_service()
+        if qdrant:
+            qdrant.upsert_post(new_post.id, current_user.id, vectors, payload)
     except Exception:
         pass
 

@@ -3,7 +3,7 @@
  * Simple zoomable image with pinch-to-zoom using react-native-reanimated
  */
 import React, { useRef } from 'react';
-import { StyleSheet, Dimensions } from 'react-native';
+import { StyleSheet, Dimensions, View, Text } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,6 +15,7 @@ import {
   PanGestureHandler,
   TapGestureHandler,
 } from 'react-native-gesture-handler';
+import { normalizeUri } from '../utils/media';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -27,6 +28,7 @@ const SPRING_CONFIG = {
 // Added onTransform callback to allow parent to capture final crop/zoom state
 // and disable distortion issues by clamping translation within bounds.
 const ZoomableImage = ({ uri, style, onTransform }) => {
+  const safeUri = normalizeUri(uri);
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -136,11 +138,17 @@ const ZoomableImage = ({ uri, style, onTransform }) => {
               onGestureEvent={onPinchEvent}
               simultaneousHandlers={[panRef]}
             >
-              <Animated.Image
-                source={{ uri }}
-                style={[styles.image, animatedStyle]}
-                resizeMode="contain"
-              />
+              {safeUri ? (
+                <Animated.Image
+                  source={{ uri: safeUri }}
+                  style={[styles.image, animatedStyle]}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={[styles.image, styles.missingMedia]}>
+                  <Text style={styles.missingText}>Media unavailable</Text>
+                </View>
+              )}
             </PinchGestureHandler>
           </Animated.View>
         </PanGestureHandler>
@@ -158,6 +166,15 @@ const styles = StyleSheet.create({
   image: {
     width: screenWidth,
     height: '100%',
+  },
+  missingMedia: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#111',
+  },
+  missingText: {
+    color: '#9AA0A6',
+    fontSize: 14,
   },
 });
 

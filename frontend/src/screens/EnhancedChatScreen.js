@@ -35,6 +35,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import messageCache from '../services/messageCache';
 import mediaUpload from '../services/mediaUpload';
 import { timeAgo, formatTime } from '../utils/formatters';
+import { normalizeUri } from '../utils/media';
 
 const EnhancedChatScreen = ({ route, navigation }) => {
   const { conversationId: initialConvId, userId, username, name } = route.params || {};
@@ -533,6 +534,7 @@ const EnhancedChatScreen = ({ route, navigation }) => {
     const isOwnMessage = item.sender_id === currentUserId;
     const showAvatar = !isOwnMessage && (index === messages.length - 1 || messages[index + 1]?.sender_id !== item.sender_id);
     const isLastMessage = index === messages.length - 1;
+    const messageMediaUri = normalizeUri(item.media_url);
     
     return (
       <View style={[
@@ -555,9 +557,9 @@ const EnhancedChatScreen = ({ route, navigation }) => {
           styles.messageBubble,
           isOwnMessage ? styles.messageBubbleOwn : styles.messageBubbleOther
         ]}>
-          {item.message_type === 'IMAGE' && item.media_url && (
+          {item.message_type === 'IMAGE' && messageMediaUri && (
             <Image
-              source={{ uri: item.media_url }}
+              source={{ uri: messageMediaUri }}
               style={styles.mediaImage}
               resizeMode="cover"
             />

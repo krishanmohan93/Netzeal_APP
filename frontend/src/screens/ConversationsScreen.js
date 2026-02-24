@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { chatAPI } from '../services/chatApi';
 import { timeAgo } from '../utils/formatters';
+import { normalizeUri } from '../utils/media';
 
 const ConversationsScreen = ({ navigation }) => {
   const [conversations, setConversations] = useState([]);
@@ -86,7 +87,7 @@ const ConversationsScreen = ({ navigation }) => {
 
   const renderConversation = ({ item }) => {
     const title = getConversationTitle(item);
-    const avatar = getConversationAvatar(item);
+    const avatar = normalizeUri(getConversationAvatar(item));
     const hasUnread = item.unread_count > 0;
 
     return (

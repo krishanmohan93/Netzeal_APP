@@ -4,6 +4,7 @@ import { Video, ResizeMode } from 'expo-av';
 import Icon from 'react-native-vector-icons/Ionicons';
 import ZoomableImage from './ZoomableImage';
 import { colors, spacing } from '../utils/theme';
+import { normalizeUri } from '../utils/media';
 
 const { width, height } = Dimensions.get('window');
 
@@ -23,11 +24,12 @@ const FullscreenMediaViewer = ({ visible, mediaItems = [], startIndex = 0, onClo
   const renderItem = ({ item, index: itemIndex }) => {
     const isVideo = item.media_type === 'VIDEO' || item.media_type === 'video';
     const isPdf = item.media_type === 'PDF' || item.media_type === 'pdf';
-    if (isVideo) {
+    const mediaUri = normalizeUri(item.url || item.uri);
+    if (isVideo && mediaUri) {
       return (
         <Video
           ref={(r) => (videoRefs.current[itemIndex] = r)}
-            source={{ uri: item.url }}
+            source={{ uri: mediaUri }}
             style={styles.media}
             resizeMode={ResizeMode.CONTAIN}
             isLooping
@@ -43,7 +45,15 @@ const FullscreenMediaViewer = ({ visible, mediaItems = [], startIndex = 0, onClo
         </View>
       );
     }
-    return <ZoomableImage uri={item.url} style={styles.media} />;
+    if (mediaUri) {
+      return <ZoomableImage uri={mediaUri} style={styles.media} />;
+    }
+    return (
+      <View style={[styles.media, styles.missingMedia]}>
+        <Icon name="image" size={64} color="#9AA0A6" />
+        <Text style={styles.missingText}>Media unavailable</Text>
+      </View>
+    );
   };
 
   return (
@@ -91,7 +101,9 @@ const styles = StyleSheet.create({
   dot: { width: DOT, height: DOT, borderRadius: DOT/2, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 4 },
   dotActive: { backgroundColor: '#fff' },
   pdfContainer: { justifyContent: 'center', alignItems: 'center' },
-  pdfText: { marginTop: 12, color: '#fff' }
+  pdfText: { marginTop: 12, color: '#fff' },
+  missingMedia: { justifyContent: 'center', alignItems: 'center' },
+  missingText: { marginTop: 12, color: '#9AA0A6' }
 });
 
 export default FullscreenMediaViewer;

@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { chatAPI } from '../services/chatApi';
 import { timeAgo } from '../utils/formatters';
+import { normalizeUri } from '../utils/media';
 
 const ChatScreen = ({ route, navigation }) => {
   const { conversationId, conversationTitle, userId, username, name } = route.params || {};
@@ -305,14 +306,16 @@ const ChatScreen = ({ route, navigation }) => {
     const isOwn = item.sender_id === currentUserId;
     const showAvatar = !isOwn && (index === messages.length - 1 || messages[index + 1]?.sender_id !== item.sender_id);
     const showTimestamp = index === 0 || messages[index - 1]?.sender_id !== item.sender_id;
+    const senderAvatarUri = normalizeUri(item.sender_profile_photo);
+    const messageMediaUri = normalizeUri(item.media_url);
 
     return (
       <View style={[styles.messageRow, isOwn && styles.ownMessageRow]}>
         {!isOwn && (
           <View style={styles.avatarSpace}>
             {showAvatar ? (
-              item.sender_profile_photo ? (
-                <Image source={{ uri: item.sender_profile_photo }} style={styles.messageAvatar} />
+              senderAvatarUri ? (
+                <Image source={{ uri: senderAvatarUri }} style={styles.messageAvatar} />
               ) : (
                 <View style={[styles.messageAvatar, styles.avatarPlaceholder]}>
                   <Ionicons name="person" size={16} color="#B8860B" />
@@ -327,9 +330,9 @@ const ChatScreen = ({ route, navigation }) => {
             <Text style={styles.senderName}>{item.sender_username}</Text>
           )}
           
-          {item.media_url && (
+          {messageMediaUri && (
             <Image
-              source={{ uri: item.media_url }}
+              source={{ uri: messageMediaUri }}
               style={styles.messageImage}
               resizeMode="cover"
             />

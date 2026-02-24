@@ -26,6 +26,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { authAPI, contentAPI, socialAPI } from '../services/api';
 import { useFirebaseAuth } from '../context/FirebaseAuthContext';
+import { normalizeUri } from '../utils/media';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -130,7 +131,8 @@ const Avatar = memo(({ uri, size = 96, hasStory = false, onPress }: {
 }) => {
   const { colors } = useTheme();
   const gradientSize = size + 8;
-  const hasImage = Boolean(uri);
+  const avatarUri = normalizeUri(uri);
+  const hasImage = Boolean(avatarUri);
 
   return (
     <TouchableOpacity
@@ -160,7 +162,7 @@ const Avatar = memo(({ uri, size = 96, hasStory = false, onPress }: {
         }}>
           {hasImage ? (
             <Image
-              source={{ uri }}
+              source={{ uri: avatarUri as string }}
               style={{ width: size, height: size }}
               resizeMode="cover"
             />
@@ -320,6 +322,7 @@ const StoryHighlight = memo(({ highlight, onPress }: {
 }) => {
   const { colors } = useTheme();
   const isNew = highlight.id === 'new';
+  const coverUri = normalizeUri(highlight.coverUrl);
 
   return (
     <TouchableOpacity
@@ -334,12 +337,14 @@ const StoryHighlight = memo(({ highlight, onPress }: {
           <View style={[styles.newHighlight, { backgroundColor: colors.surface }]}>
             <Ionicons name="add" size={32} color={colors.text} />
           </View>
-        ) : (
+        ) : coverUri ? (
           <Image
-            source={{ uri: highlight.coverUrl }}
+            source={{ uri: coverUri }}
             style={styles.highlightImage}
             resizeMode="cover"
           />
+        ) : (
+          <View style={[styles.highlightImage, { backgroundColor: colors.border }]} />
         )}
       </View>
       <Text style={[styles.highlightTitle, { color: colors.text }]} numberOfLines={1}>
@@ -397,7 +402,8 @@ const PostTile = memo(({ post, onPress, onLongPress, onDoubleTap }: {
 }) => {
   const { colors } = useTheme();
   const [lastTap, setLastTap] = useState(0);
-  const hasImage = Boolean(post.imageUrl);
+  const imageUri = normalizeUri(post.imageUrl);
+  const hasImage = Boolean(imageUri);
 
   const handlePress = useCallback(() => {
     const now = Date.now();
@@ -420,7 +426,7 @@ const PostTile = memo(({ post, onPress, onLongPress, onDoubleTap }: {
       accessibilityRole="imagebutton"
     >
       {hasImage ? (
-        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+        <Image source={{ uri: imageUri as string }} style={styles.tileImage} resizeMode="cover" />
       ) : (
         <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
       )}
@@ -445,7 +451,8 @@ const ReelsTile = memo(({ post, onPress }: {
   onPress: () => void;
 }) => {
   const { colors } = useTheme();
-  const hasImage = Boolean(post.imageUrl);
+  const imageUri = normalizeUri(post.imageUrl);
+  const hasImage = Boolean(imageUri);
 
   return (
     <TouchableOpacity
@@ -457,7 +464,7 @@ const ReelsTile = memo(({ post, onPress }: {
       accessibilityRole="imagebutton"
     >
       {hasImage ? (
-        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+        <Image source={{ uri: imageUri as string }} style={styles.tileImage} resizeMode="cover" />
       ) : (
         <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
       )}
@@ -478,7 +485,8 @@ const TaggedTile = memo(({ post, onPress }: {
   onPress: () => void;
 }) => {
   const { colors } = useTheme();
-  const hasImage = Boolean(post.imageUrl);
+  const imageUri = normalizeUri(post.imageUrl);
+  const hasImage = Boolean(imageUri);
 
   return (
     <TouchableOpacity
@@ -490,7 +498,7 @@ const TaggedTile = memo(({ post, onPress }: {
       accessibilityRole="imagebutton"
     >
       {hasImage ? (
-        <Image source={{ uri: post.imageUrl }} style={styles.tileImage} resizeMode="cover" />
+        <Image source={{ uri: imageUri as string }} style={styles.tileImage} resizeMode="cover" />
       ) : (
         <View style={[styles.tileImage, { backgroundColor: colors.border }]} />
       )}

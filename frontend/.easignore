@@ -1,0 +1,13 @@
+node_modules
+.expo
+.expo-shared
+android
+ios
+dist
+build
+coverage
+*.log
+*.tmp
+*.crdownload
+**/.DS_Store
+**/Thumbs.db

@@ -10,7 +10,7 @@ from ..models.content import ContentType, MediaType
 class PostBase(BaseModel):
     """Base post schema"""
     title: Optional[str] = None
-    content: str = Field(..., min_length=1)
+    content: Optional[str] = None
     content_type: ContentType = ContentType.POST
     media_urls: Optional[List[str]] = None
     tags: Optional[List[str]] = None
@@ -18,7 +18,7 @@ class PostBase(BaseModel):
 
 class PostCreate(PostBase):
     """Schema for creating a post"""
-    pass
+    content: str = Field(..., min_length=1)
 
 
 class InstagramPostCreate(BaseModel):
@@ -65,6 +65,13 @@ class PostResponse(PostBase):
     is_liked: bool = False
     is_bookmarked: bool = False
     
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, v):
+        if v is None:
+            return ""
+        return v
+
     class Config:
         from_attributes = True
 

@@ -4,6 +4,7 @@
  */
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { API_BASE_URL, API_CONFIG } from '../config/environment';
 import { Alert } from 'react-native';
 
@@ -13,6 +14,11 @@ let refreshToken = null;
 let isRefreshing = false;
 let failedQueue = [];
 let sessionExpiredShown = false; // Track if session expired alert is already shown
+
+const ACCESS_TOKEN_KEY = 'access_token';
+const REFRESH_TOKEN_KEY = 'refresh_token';
+const LEGACY_ACCESS_TOKEN_KEYS = ['token', 'accessToken'];
+const LEGACY_REFRESH_TOKEN_KEYS = ['refreshToken'];
 
 const processQueue = (error, token = null) => {
   failedQueue.forEach(prom => {
@@ -26,30 +32,106 @@ const processQueue = (error, token = null) => {
   failedQueue = [];
 };
 
-export const setAuthToken = async (token, refresh = null) => {
-  authToken = token;
-  refreshToken = refresh;
+const safeSecureGet = async (key) => {
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch (e) {
+    return null;
+  }
+};
+
+const safeSecureSet = async (key, value) => {
+  try {
+    await SecureStore.setItemAsync(key, value);
+  } catch (e) {
+    // Ignore SecureStore failures (e.g., web)
+  }
+};
+
+const safeSecureDelete = async (key) => {
+  try {
+    await SecureStore.deleteItemAsync(key);
+  } catch (e) {
+    // Ignore SecureStore failures (e.g., web)
+  }
+};
+
+const safeAsyncGet = async (key) => {
+  try {
+    return await AsyncStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+};
+
+const readFirstAsyncStorage = async (keys) => {
+  for (const key of keys) {
+    const value = await safeAsyncGet(key);
+    if (value) return value;
+  }
+  return null;
+};
+
+export const setAuthToken = async (token, refresh) => {
+  authToken = token ?? null;
+  if (typeof refresh !== 'undefined') {
+    refreshToken = refresh;
+  }
 
   // Reset session expired flag when setting new token
   if (token) {
     sessionExpiredShown = false;
+    await safeSecureSet(ACCESS_TOKEN_KEY, token);
+    await AsyncStorage.setItem(ACCESS_TOKEN_KEY, token);
     await AsyncStorage.setItem('token', token);
+    await AsyncStorage.setItem('accessToken', token);
   } else {
-    await AsyncStorage.removeItem('token');
+    await safeSecureDelete(ACCESS_TOKEN_KEY);
+    await AsyncStorage.multiRemove([ACCESS_TOKEN_KEY, 'token', 'accessToken']);
   }
 
-  if (refresh) {
-    await AsyncStorage.setItem('refreshToken', refresh);
-  } else {
-    await AsyncStorage.removeItem('refreshToken');
+  if (typeof refresh !== 'undefined') {
+    if (refresh) {
+      await safeSecureSet(REFRESH_TOKEN_KEY, refresh);
+      await AsyncStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+      await AsyncStorage.setItem('refreshToken', refresh);
+    } else {
+      await safeSecureDelete(REFRESH_TOKEN_KEY);
+      await AsyncStorage.multiRemove([REFRESH_TOKEN_KEY, 'refreshToken']);
+    }
   }
 };
 
 // Helper to retrieve current access token (used by media upload service)
 export const getAuthToken = async () => {
   if (authToken) return authToken;
-  authToken = await AsyncStorage.getItem('token');
+  const secureToken = await safeSecureGet(ACCESS_TOKEN_KEY);
+  authToken = secureToken || await readFirstAsyncStorage([ACCESS_TOKEN_KEY, ...LEGACY_ACCESS_TOKEN_KEYS]);
+  if (!refreshToken) {
+    refreshToken = await getRefreshToken();
+  }
   return authToken;
+};
+
+export const getRefreshToken = async () => {
+  if (refreshToken) return refreshToken;
+  const secureToken = await safeSecureGet(REFRESH_TOKEN_KEY);
+  refreshToken = secureToken || await readFirstAsyncStorage([REFRESH_TOKEN_KEY, ...LEGACY_REFRESH_TOKEN_KEYS]);
+  return refreshToken;
+};
+
+export const clearAuthTokens = async () => {
+  authToken = null;
+  refreshToken = null;
+  await safeSecureDelete(ACCESS_TOKEN_KEY);
+  await safeSecureDelete(REFRESH_TOKEN_KEY);
+  await AsyncStorage.multiRemove([
+    ACCESS_TOKEN_KEY,
+    REFRESH_TOKEN_KEY,
+    'token',
+    'accessToken',
+    'refreshToken',
+  ]);
 };
 
 // Enhanced axios configuration with retry logic
@@ -95,16 +177,10 @@ api.interceptors.request.use(
   async (config) => {
     try {
       // Prefer in-memory token; fall back to AsyncStorage
-      const token = authToken ?? (await AsyncStorage.getItem('token'));
+      const token = await getAuthToken();
       if (token) {
         config.headers = config.headers || {};
         config.headers.Authorization = `Bearer ${token}`;
-
-        // Cache for future use
-        if (!authToken) {
-          authToken = token;
-          refreshToken = await AsyncStorage.getItem('refreshToken');
-        }
       }
       return config;
     } catch (e) {
@@ -175,7 +251,7 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       // Try to refresh token
-      const storedRefreshToken = refreshToken ?? (await AsyncStorage.getItem('refreshToken'));
+      const storedRefreshToken = await getRefreshToken();
 
       if (storedRefreshToken) {
         try {
@@ -205,18 +281,11 @@ api.interceptors.response.use(
           isRefreshing = false;
 
           // Clear auth data
-          authToken = null;
-          refreshToken = null;
-          await AsyncStorage.removeItem('token');
-          await AsyncStorage.removeItem('refreshToken');
+          await clearAuthTokens();
           await AsyncStorage.removeItem('user');
           await AsyncStorage.removeItem('user_data');
 
-          // Clear secure storage
           try {
-            const SecureStore = await import('expo-secure-store');
-            await SecureStore.deleteItemAsync('access_token').catch(() => { });
-            await SecureStore.deleteItemAsync('refresh_token').catch(() => { });
             await SecureStore.deleteItemAsync('firebaseToken').catch(() => { });
             await SecureStore.deleteItemAsync('userId').catch(() => { });
           } catch (e) {
@@ -240,20 +309,9 @@ api.interceptors.response.use(
       } else {
         // No refresh token - logout
         isRefreshing = false;
-        authToken = null;
-        await AsyncStorage.removeItem('token');
-        await AsyncStorage.removeItem('refreshToken');
+        await clearAuthTokens();
         await AsyncStorage.removeItem('user');
         await AsyncStorage.removeItem('user_data');
-
-        // Clear secure storage
-        try {
-          const SecureStore = await import('expo-secure-store');
-          await SecureStore.deleteItemAsync('access_token').catch(() => { });
-          await SecureStore.deleteItemAsync('refresh_token').catch(() => { });
-        } catch (e) {
-          console.log('SecureStore cleanup skipped');
-        }
 
         // Show session expired message ONLY ONCE
         if (!sessionExpiredShown) {

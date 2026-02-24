@@ -2,7 +2,9 @@
   "expo": {
     "name": "NetZeal",
     "slug": "netzeal",
+    "scheme": "netzeal",
     "version": "1.0.0",
+    "owner": "krishanmohan",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./Logo_NetZeal.png",
@@ -14,9 +16,27 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "plugins": [
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "expoClient": {
+        "googleOAuth": {
+          "expoClientId": "969312048318-4ka0pqht3npf3j6ohqrevfj6jvvno9js.apps.googleusercontent.com"
+        }
+      },
+      "eas": {
+        "projectId": "108fe6ee-3f41-4594-88c4-755f0f182add"
+      }
+    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.netzeal.app"
+      "bundleIdentifier": "com.netzeal.app",
+      "config": {
+        "googleSignIn": {
+          "reservedClientId": "com.googleusercontent.apps.969312048318-4ka0pqht3npf3j6ohqrevfj6jvvno9js"
+        }
+      }
     },
     "android": {
       "backgroundColor": "#FFFFFF",
@@ -28,7 +48,12 @@
       "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "build": {
+        "babel": {
+          "include": []
+        }
+      }
     }
   }
 }
