@@ -71,7 +71,6 @@ export const initDatabase = async () => {
       );
     `);
     
-    console.log('✅ SQLite database initialized');
     return db;
   } catch (error) {
     console.error('❌ Error initializing database:', error);
@@ -153,7 +152,6 @@ export const cacheMessages = async (conversationId, messages) => {
       }
     });
     
-    console.log(`✅ Cached ${messages.length} messages for conversation ${conversationId}`);
   } catch (error) {
     console.error('Error caching messages:', error);
   }
@@ -415,7 +413,6 @@ export const clearAllCache = async () => {
       DELETE FROM pending_messages;
     `);
     
-    console.log('✅ All chat cache cleared');
   } catch (error) {
     console.error('Error clearing cache:', error);
   }
@@ -447,7 +444,6 @@ export const syncPendingMessages = async (sendMessageFunction) => {
         
         // Remove from pending on success
         await removePendingMessage(msg.temp_id);
-        console.log(`✅ Synced pending message ${msg.temp_id}`);
       } catch (error) {
         console.error(`❌ Failed to sync message ${msg.temp_id}:`, error);
         await incrementRetryCount(msg.temp_id);

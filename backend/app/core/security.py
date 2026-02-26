@@ -73,7 +73,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
-def create_refresh_token(data: dict) -> str:
+def create_refresh_token(data: dict, token_version: Optional[int] = None) -> str:
     """
     Create a JWT refresh token (long-lived)
     
@@ -91,6 +91,8 @@ def create_refresh_token(data: dict) -> str:
         "iat": datetime.utcnow(),
         "type": "refresh"
     })
+    if token_version is not None:
+        to_encode["rv"] = int(token_version)
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     
     return encoded_jwt

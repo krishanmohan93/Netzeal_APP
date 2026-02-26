@@ -27,7 +27,7 @@ export async function uploadMedia({ fileUri, caption, isReel, trimStart, trimDur
 
   const res = await axios.post(`${API_BASE}/content/upload-post`, form, {
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: (p) => console.log('Upload', p.loaded / (p.total || 1))
+    onUploadProgress: () => {}
   });
   return res.data;
 }

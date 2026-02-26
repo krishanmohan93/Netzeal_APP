@@ -16,12 +16,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { chatAPI } from '../services/chatApi';
 import { timeAgo } from '../utils/formatters';
 import { normalizeUri } from '../utils/media';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const ConversationsScreen = ({ navigation }) => {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [retrying, setRetrying] = useState(false);
 
   const loadConversations = async () => {
     try {
@@ -29,11 +31,11 @@ const ConversationsScreen = ({ navigation }) => {
       const data = await chatAPI.getConversations();
       setConversations(data);
     } catch (err) {
-      console.error('Failed to load conversations:', err);
-      setError('Failed to load conversations');
+      setError(getUserFacingError(err, 'Could not load conversations. Please try again.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setRetrying(false);
     }
   };
 
@@ -158,8 +160,11 @@ const ConversationsScreen = ({ navigation }) => {
       <View style={styles.centerContainer}>
         <Ionicons name="alert-circle" size={48} color="#999" />
         <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={loadConversations}>
-          <Text style={styles.retryText}>Retry</Text>
+        <TouchableOpacity style={[styles.retryButton, retrying && styles.buttonDisabled]} onPress={() => {
+          setRetrying(true);
+          loadConversations();
+        }} disabled={retrying}>
+          {retrying ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.retryText}>Retry</Text>}
         </TouchableOpacity>
       </View>
     );
@@ -190,8 +195,9 @@ const ConversationsScreen = ({ navigation }) => {
 
       {/* Floating action button - New chat */}
       <TouchableOpacity
-        style={styles.fab}
+        style={[styles.fab, loading && styles.buttonDisabled]}
         onPress={() => navigation.navigate('NewChat')}
+        disabled={loading}
         activeOpacity={0.8}
       >
         <Ionicons name="create-outline" size={28} color="#fff" />
@@ -330,6 +336,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   fab: {
     position: 'absolute',

@@ -1,7 +1,7 @@
 """
 Content models for posts, articles, and media
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, JSON, Boolean, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, JSON, Boolean, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -248,6 +248,7 @@ class Like(Base):
     """Like model for post engagement"""
     
     __tablename__ = "likes"
+    __table_args__ = (UniqueConstraint("user_id", "post_id", name="uq_likes_user_post"),)
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

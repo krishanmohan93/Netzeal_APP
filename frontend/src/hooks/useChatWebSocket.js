@@ -43,7 +43,6 @@ export const useChatWebSocket = (conversationId, onNewMessage, onTyping, onReadR
       wsRef.current = new WebSocket(wsUrl);
 
       wsRef.current.onopen = () => {
-        console.log('Chat WebSocket connected');
         setConnected(true);
         
         // Join conversation room
@@ -70,7 +69,6 @@ export const useChatWebSocket = (conversationId, onNewMessage, onTyping, onReadR
       };
 
       wsRef.current.onclose = () => {
-        console.log('Chat WebSocket disconnected');
         setConnected(false);
         
         // Attempt reconnect after 3 seconds

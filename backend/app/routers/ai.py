@@ -19,8 +19,10 @@ from ..services.groq_deepseek_service import AIService
 from ..services.recommendation_service import recommendation_service
 from ..models.social import AIConversation
 from datetime import datetime
+import logging
 
 router = APIRouter(prefix="/ai", tags=["AI & Recommendations"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -74,10 +76,9 @@ Current message: {message.message}
 Respond naturally and helpfully based on the user's profile and conversation history."""
 
     try:
-        # Use Groq (free) for chat - faster and no API key issues
         ai_response_text = await AIService.generate_ai_response(
             prompt=full_prompt,
-            mode="free",  # Use free Groq
+            mode="free",
             temperature=0.7,
             max_tokens=500
         )
@@ -86,10 +87,7 @@ Respond naturally and helpfully based on the user's profile and conversation his
         intent = _detect_intent(message.message)
         
     except Exception as e:
-        # Log the actual error for debugging
-        import traceback
-        print(f"AI Chat Error: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("AI chat generation failed: %s", e)
         
         # Fallback graceful response
         ai_response_text = (
@@ -126,9 +124,7 @@ Respond naturally and helpfully based on the user's profile and conversation his
         if intent in {"project_recommendation", "career_advice"}:
             rec_opportunities = await recommendation_service.recommend_opportunities(db, current_user.id, limit=6)
     except Exception as e:
-        print(f"Recommendation Error: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
+        logger.exception("AI recommendation generation failed: %s", e)
     
     return ChatResponse(
         response=ai_response_text,

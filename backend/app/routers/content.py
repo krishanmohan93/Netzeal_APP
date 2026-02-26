@@ -3,14 +3,18 @@ Content management routes (posts, comments, likes, bookmarks)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 import logging
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 from sqlalchemy import desc, or_, func
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from typing import List, Optional
 import json
 
 from ..core.database import get_db
+from ..core.config import settings
 from ..core.security import get_current_user
+from ..core.rate_limit import post_create_rate_limit, engagement_rate_limit
+from ..core.feature_gates import require_live_streaming_enabled, require_semantic_features_enabled
 from ..core.cloudinary_config import cloudinary_service
 from ..models import User, Post, Comment, Like, Bookmark, UserInteraction, InteractionType, Connection
 from ..models.content import ContentType, LiveSession, LiveComment, PostMedia, MediaType
@@ -37,28 +41,43 @@ from ..schemas.content import (
 )
 from ..utils.ws import manager
 from ..services.notification_service import create_notification
-from ..utils.redis_cache import invalidate_all_feeds, get_client
+from ..utils.redis_cache import get_cached_json, set_cached_json, paged_feed_cache_key, get_cache, set_cache
 from ..models.content import FeedItem
 from ..services.groq_deepseek_service import AIService
+from ..services.embedding_service import EmbeddingService
 from ..services.qdrant_service import QdrantService
-from ..utils.db_performance import bulk_insert_feed_items_safe
+from ..workers.feed_tasks import fanout_post_to_followers
 
 router = APIRouter(prefix="/content", tags=["Content"])
 logger = logging.getLogger(__name__)
 
-# Mock embedding service for testing without ML dependencies
-class MockEmbeddingService:
-    def embed_text(self, text):
-        return [0.0] * 384  # Mock 384-dim vector
-    def embed_query(self, text):
-        return [0.0] * 384
-    def embed_post(self, *args, **kwargs):
-        return {"caption_embedding": [0.0]*384, "hashtags_embedding": [0.0]*384, "image_embedding": [0.0]*384}
-
 # Lazy initialization of Qdrant and Embedding services
+_embedding_service = None
+_embedding_init_attempted = False
 _qdrant_service = None
 _qdrant_init_attempted = False
-embedding_service = MockEmbeddingService()  # Use mock instead of real to avoid torch dependency
+
+
+def get_embedding_service():
+    """Lazy initialization of embedding service with error handling."""
+    global _embedding_service, _embedding_init_attempted
+
+    if _embedding_service is not None:
+        return _embedding_service
+
+    if _embedding_init_attempted:
+        return None
+
+    _embedding_init_attempted = True
+
+    try:
+        _embedding_service = EmbeddingService()
+        print("✅ Embedding model initialized")
+        return _embedding_service
+    except Exception as e:
+        print(f"⚠️ Embedding model initialization failed: {e}")
+        print("   Semantic features are currently unavailable")
+        return None
 
 def get_qdrant_service():
     """Lazy initialization of Qdrant service with error handling."""
@@ -96,24 +115,12 @@ def _get_allowed_author_ids(db: Session, current_user: User) -> List[int]:
     return [row[0] for row in db.query(User.id).filter(User.public_id.in_(public_ids)).all()]
 
 
-def _get_fanout_user_ids(db: Session, author_public_id) -> List[int]:
-    follower_rows = (
-        db.query(Connection.follower_id)
-        .filter(Connection.following_id == author_public_id, Connection.status == "connected")
-        .all()
-    )
-    public_ids = {author_public_id}
-    public_ids.update(row[0] for row in follower_rows if row[0])
-    if not public_ids:
-        return []
-    return [row[0] for row in db.query(User.id).filter(User.public_id.in_(public_ids)).all()]
-
-
 @router.post("/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
 async def create_post(
     post_data: PostCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(post_create_rate_limit),
 ):
     """Create a new post"""
     
@@ -151,6 +158,16 @@ async def create_post(
         db.commit()
     except Exception as e:
         print(f"Error generating AI metadata: {e}")
+
+    try:
+        fanout_post_to_followers.delay(new_post.id, current_user.id)
+    except Exception as e:
+        logger.warning("Failed to enqueue fanout task for post %s: %s", new_post.id, e)
+
+    try:
+        await manager.broadcast_json({"type": "NEW_POST", "post_id": new_post.id})
+    except Exception:
+        pass
     
     # Add author info
     post_dict = PostResponse.model_validate(new_post).model_dump()
@@ -171,6 +188,8 @@ async def get_user_posts_by_id(
     db: Session = Depends(get_db)
 ):
     """Get posts for a specific user profile"""
+
+    limit = min(limit, 50)
     
     # Resolve user
     user = None
@@ -190,16 +209,52 @@ async def get_user_posts_by_id(
     # Get posts (public visibility check could be added here)
     posts = (
         db.query(Post)
+        .options(
+            load_only(
+                Post.id,
+                Post.author_id,
+                Post.title,
+                Post.content,
+                Post.content_type,
+                Post.media_urls,
+                Post.tags,
+                Post.views_count,
+                Post.likes_count,
+                Post.comments_count,
+                Post.shares_count,
+                Post.topics,
+                Post.created_at,
+                Post.updated_at,
+            ),
+            joinedload(Post.author).load_only(User.id, User.username, User.full_name, User.profile_photo)
+        )
         .filter(Post.author_id == user.id)
         .order_by(desc(Post.created_at))
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    post_ids = [post.id for post in posts]
     
     # Get user's likes and bookmarks reuse logic
-    user_likes = {like.post_id for like in db.query(Like).filter(Like.user_id == current_user.id).all()}
-    user_bookmarks = {bm.post_id for bm in db.query(Bookmark).filter(Bookmark.user_id == current_user.id).all()}
+    user_likes = set()
+    user_bookmarks = set()
+    if post_ids:
+        user_likes = {
+            like.post_id
+            for like in db.query(Like)
+            .options(load_only(Like.post_id))
+            .filter(Like.user_id == current_user.id, Like.post_id.in_(post_ids))
+            .all()
+        }
+        user_bookmarks = {
+            bm.post_id
+            for bm in db.query(Bookmark)
+            .options(load_only(Bookmark.post_id))
+            .filter(Bookmark.user_id == current_user.id, Bookmark.post_id.in_(post_ids))
+            .all()
+        }
     
     result = []
     for post in posts:
@@ -223,22 +278,65 @@ async def get_posts(
 ):
     """Get all posts (feed)"""
 
+    limit = min(limit, 50)
+
+    cache_key = paged_feed_cache_key(current_user.id, skip, limit)
+    cached = await get_cached_json(cache_key)
+    if cached is not None:
+        return cached
+
     allowed_author_ids = _get_allowed_author_ids(db, current_user)
     if not allowed_author_ids:
         return []
 
     posts = (
         db.query(Post)
+        .options(
+            load_only(
+                Post.id,
+                Post.author_id,
+                Post.title,
+                Post.content,
+                Post.content_type,
+                Post.media_urls,
+                Post.tags,
+                Post.views_count,
+                Post.likes_count,
+                Post.comments_count,
+                Post.shares_count,
+                Post.topics,
+                Post.created_at,
+                Post.updated_at,
+            ),
+            joinedload(Post.author).load_only(User.id, User.username, User.full_name, User.profile_photo)
+        )
         .filter(Post.author_id.in_(allowed_author_ids))
         .order_by(desc(Post.created_at))
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    post_ids = [post.id for post in posts]
     
     # Get user's likes and bookmarks
-    user_likes = {like.post_id for like in db.query(Like).filter(Like.user_id == current_user.id).all()}
-    user_bookmarks = {bm.post_id for bm in db.query(Bookmark).filter(Bookmark.user_id == current_user.id).all()}
+    user_likes = set()
+    user_bookmarks = set()
+    if post_ids:
+        user_likes = {
+            like.post_id
+            for like in db.query(Like)
+            .options(load_only(Like.post_id))
+            .filter(Like.user_id == current_user.id, Like.post_id.in_(post_ids))
+            .all()
+        }
+        user_bookmarks = {
+            bm.post_id
+            for bm in db.query(Bookmark)
+            .options(load_only(Bookmark.post_id))
+            .filter(Bookmark.user_id == current_user.id, Bookmark.post_id.in_(post_ids))
+            .all()
+        }
     
     result = []
     for post in posts:
@@ -250,6 +348,7 @@ async def get_posts(
         post_dict["is_bookmarked"] = post.id in user_bookmarks
         result.append(post_dict)
     
+    await set_cached_json(cache_key, result, settings.FEED_CACHE_TTL_SECONDS)
     return result
 
 
@@ -383,7 +482,8 @@ async def get_post(
 async def like_post(
     post_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     """Like a post"""
     
@@ -402,17 +502,17 @@ async def like_post(
     ).first()
     
     if existing_like:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Already liked this post"
-        )
+        return existing_like
     
     # Create like
     new_like = Like(user_id=current_user.id, post_id=post_id)
     db.add(new_like)
     
-    # Update post likes count
-    post.likes_count += 1
+    # Update post likes count atomically
+    db.query(Post).filter(Post.id == post_id).update(
+        {Post.likes_count: Post.likes_count + 1},
+        synchronize_session=False,
+    )
     
     # Track interaction
     interaction = UserInteraction(
@@ -422,7 +522,18 @@ async def like_post(
     )
     db.add(interaction)
     
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing_like = db.query(Like).filter(
+            Like.user_id == current_user.id,
+            Like.post_id == post_id,
+        ).first()
+        if existing_like:
+            return existing_like
+        raise
+
     db.refresh(new_like)
     
     # NOTIFICATION
@@ -442,7 +553,8 @@ async def like_post(
 async def unlike_post(
     post_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     """Unlike a post"""
     
@@ -452,15 +564,13 @@ async def unlike_post(
     ).first()
     
     if not like:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Like not found"
-        )
+        return {"message": "Post already unliked"}
     
-    # Update post likes count
-    post = db.query(Post).filter(Post.id == post_id).first()
-    if post:
-        post.likes_count = max(0, post.likes_count - 1)
+    # Update post likes count atomically
+    db.query(Post).filter(Post.id == post_id).update(
+        {Post.likes_count: func.greatest(Post.likes_count - 1, 0)},
+        synchronize_session=False,
+    )
     
     db.delete(like)
     db.commit()
@@ -519,7 +629,8 @@ async def create_comment(
     post_id: int,
     comment_data: CommentCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     """Add a comment to a post"""
     
@@ -540,8 +651,11 @@ async def create_comment(
     
     db.add(new_comment)
     
-    # Update post comments count
-    post.comments_count += 1
+    # Update post comments count atomically
+    db.query(Post).filter(Post.id == post_id).update(
+        {Post.comments_count: Post.comments_count + 1},
+        synchronize_session=False,
+    )
     
     # Track interaction
     interaction = UserInteraction(
@@ -581,8 +695,12 @@ async def get_post_comments(
     db: Session = Depends(get_db)
 ):
     """Get comments for a post"""
+
+    limit = min(limit, 50)
     
-    comments = db.query(Comment).filter(
+    comments = db.query(Comment).options(
+        joinedload(Comment.author).load_only(User.id, User.username, User.full_name, User.profile_photo)
+    ).filter(
         Comment.post_id == post_id
     ).order_by(desc(Comment.created_at)).offset(skip).limit(limit).all()
     
@@ -614,7 +732,8 @@ async def upload_instagram_post(
     overlay_text: Optional[str] = Form(None, description="Optional text overlay for video"),
     audio_public_id: Optional[str] = Form(None, description="Optional Cloudinary audio public_id to overlay (reels)"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(post_create_rate_limit),
 ):
     """
     Upload Instagram-like post with image or video
@@ -763,6 +882,10 @@ async def upload_instagram_post(
 
     # Index post in Qdrant for semantic search
     try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise RuntimeError("Embedding service unavailable")
+
         vectors = embedding_service.embed_post(
             post_id=new_post.id,
             caption=caption,
@@ -782,22 +905,17 @@ async def upload_instagram_post(
     except Exception as e:
         print(f"⚠️ Qdrant indexing failed for post {new_post.id}: {e}")
 
-    # Fan-out to all users immediately so new upload appears in cursor feed
-    # Using optimized bulk insert for performance
+    # Fan-out in background worker for faster API response
     try:
-        user_ids = _get_fanout_user_ids(db, current_user.public_id)
-        if user_ids:
-            inserted_count = bulk_insert_feed_items_safe(db, new_post.id, user_ids)
-            print(f"✅ Fan-out complete: {inserted_count} feed items created")
-        # Invalidate any cached feeds (optional Redis)
-        try:
-            await invalidate_all_feeds()
-        except Exception as e:
-            print(f"Redis invalidate skipped (upload): {e}")
+        fanout_post_to_followers.delay(new_post.id, current_user.id)
+    except Exception as e:
+        logger.warning("Failed to enqueue fanout task for post %s: %s", new_post.id, e)
+
+    try:
         # Broadcast to websocket subscribers
         await manager.broadcast_json({"type": "NEW_POST", "post_id": new_post.id})
     except Exception as e:
-        print(f"⚠️ Fan-out failed for upload post {new_post.id}: {e}")
+        print(f"⚠️ Broadcast failed for upload post {new_post.id}: {e}")
 
     print(f"✅ Post created & published successfully! ID: {new_post.id}, content_type: {new_post.content_type.value}")
     
@@ -834,7 +952,8 @@ async def upload_multiple_media_posts(
     tags: Optional[str] = Form(None, description="Comma-separated tags"),
     reels: Optional[str] = Form(None, description="Comma-separated indices (0-based) of files that are reels"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(post_create_rate_limit),
 ):
     """Upload multiple media items as separate posts in a single request.
 
@@ -877,7 +996,7 @@ async def upload_multiple_media_posts(
         try:
             blob = await file.read()
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error reading file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail="Error processing upload")
 
         try:
             if is_image:
@@ -897,7 +1016,7 @@ async def upload_multiple_media_posts(
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Upload error for {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail="Upload failed")
 
         media_url = upload_result['url']
         media_public_id = upload_result['public_id']
@@ -932,6 +1051,10 @@ async def upload_multiple_media_posts(
 
         # Index post in Qdrant for semantic search
         try:
+            embedding_service = get_embedding_service()
+            if not embedding_service:
+                raise RuntimeError("Embedding service unavailable")
+
             vectors = embedding_service.embed_post(
                 post_id=post.id,
                 caption=caption,
@@ -951,18 +1074,16 @@ async def upload_multiple_media_posts(
         except Exception as e:
             print(f"⚠️ Qdrant indexing failed for post {post.id}: {e}")
 
-        # Fan-out: simplified per post (could batch later)
+        # Fan-out in background per post
         try:
-            user_ids = _get_fanout_user_ids(db, current_user.public_id)
-            if user_ids:
-                bulk_insert_feed_items_safe(db, post.id, user_ids)
-            try:
-                await invalidate_all_feeds()
-            except Exception:
-                pass
+            fanout_post_to_followers.delay(post.id, current_user.id)
+        except Exception as e:
+            logger.warning("Failed to enqueue fanout task for post %s: %s", post.id, e)
+
+        try:
             await manager.broadcast_json({"type": "NEW_POST", "post_id": post.id})
         except Exception as e:
-            print(f"Fan-out failed for post {post.id}: {e}")
+            print(f"Broadcast failed for post {post.id}: {e}")
 
         responses.append(
             InstagramFeedPostResponse(
@@ -1010,6 +1131,13 @@ async def get_instagram_feed(
     
     print(f"📰 Feed request from user: {current_user.username} (skip={skip}, limit={limit})")
 
+    cache_key = paged_feed_cache_key(current_user.id, skip, limit)
+    cached_feed = await get_cache(cache_key)
+    if cached_feed is not None:
+        logger.info("Feed cache HIT key=%s user_id=%s", cache_key, current_user.id)
+        return cached_feed
+    logger.info("Feed cache MISS key=%s user_id=%s", cache_key, current_user.id)
+
     allowed_author_ids = _get_allowed_author_ids(db, current_user)
     if not allowed_author_ids:
         return []
@@ -1018,6 +1146,28 @@ async def get_instagram_feed(
     # Include posts that have either media_urls OR PostMedia items
     posts = (
         db.query(Post)
+        .options(
+            joinedload(Post.author).load_only(
+                User.id,
+                User.username,
+                User.full_name,
+                User.profile_photo,
+                User.is_verified,
+            ),
+            selectinload(Post.media_items).load_only(
+                PostMedia.id,
+                PostMedia.post_id,
+                PostMedia.media_type,
+                PostMedia.url,
+                PostMedia.thumb_url,
+                PostMedia.order_index,
+                PostMedia.width,
+                PostMedia.height,
+                PostMedia.duration_seconds,
+            ),
+            selectinload(Post.likes).load_only(Like.id, Like.post_id),
+            selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+        )
         .filter(Post.author_id.in_(allowed_author_ids))
         .filter(
             or_(
@@ -1052,22 +1202,11 @@ async def get_instagram_feed(
         ).all()
     }
     
-    # Preload PostMedia items for posts that use the new media table
-    media_rows = (
-        db.query(PostMedia)
-        .filter(PostMedia.post_id.in_(post_ids))
-        .order_by(PostMedia.post_id, PostMedia.order_index)
-        .all()
-    )
-    media_map = {}
-    for m in media_rows:
-        media_map.setdefault(m.post_id, []).append(m)
-    
     # Build feed response
     feed = []
     for post in posts:
         # Check if post has PostMedia items (new carousel system)
-        post_media_items = media_map.get(post.id, [])
+        post_media_items = post.media_items or []
         if post_media_items:
             # Use first media item from PostMedia table
             first_media = post_media_items[0]
@@ -1112,7 +1251,10 @@ async def get_instagram_feed(
             created_at=post.created_at
         )
         feed.append(feed_post)
-    
+
+    cache_payload = [item.model_dump() for item in feed]
+    await set_cache(cache_key, cache_payload, settings.FEED_CACHE_TTL_SECONDS)
+
     return feed
 
 
@@ -1135,6 +1277,22 @@ async def get_multi_media_feed(
     posts = (
         db.query(Post)
         .join(PostMedia, Post.id == PostMedia.post_id)
+        .options(
+            joinedload(Post.author).load_only(User.id, User.username, User.full_name, User.profile_photo),
+            selectinload(Post.media_items).load_only(
+                PostMedia.id,
+                PostMedia.post_id,
+                PostMedia.media_type,
+                PostMedia.url,
+                PostMedia.thumb_url,
+                PostMedia.order_index,
+                PostMedia.width,
+                PostMedia.height,
+                PostMedia.duration_seconds,
+            ),
+            selectinload(Post.likes).load_only(Like.id, Like.post_id),
+            selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+        )
         .filter(Post.author_id.in_(allowed_author_ids))
         .distinct()
         .order_by(desc(Post.created_at))
@@ -1147,16 +1305,6 @@ async def get_multi_media_feed(
         return []
 
     post_ids = [p.id for p in posts]
-    # Preload media items
-    media_rows = (
-        db.query(PostMedia)
-        .filter(PostMedia.post_id.in_(post_ids))
-        .order_by(PostMedia.post_id, PostMedia.order_index)
-        .all()
-    )
-    media_map = {}
-    for m in media_rows:
-        media_map.setdefault(m.post_id, []).append(m)
 
     # User like & bookmark flags
     user_likes = {like.post_id for like in db.query(Like).filter(Like.user_id == current_user.id, Like.post_id.in_(post_ids)).all()}
@@ -1164,7 +1312,7 @@ async def get_multi_media_feed(
 
     out: List[MultiMediaPostOut] = []
     for post in posts:
-        media_items_rows = media_map.get(post.id, [])
+        media_items_rows = post.media_items or []
         media_items_out = [PostMediaOut.model_validate(r) for r in media_items_rows]
         out.append(
             MultiMediaPostOut(
@@ -1197,7 +1345,8 @@ async def get_multi_media_feed(
 async def create_post_draft(
     draft: PostDraftCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(post_create_rate_limit),
 ):
     """Create an unpublished draft post (image/video)."""
     if draft.media_type not in {"image", "video"}:
@@ -1245,7 +1394,8 @@ async def create_post_draft(
 async def publish_post(
     post_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(post_create_rate_limit),
 ):
     """Publish a draft post and fan-out to all user feeds."""
     post = db.query(Post).filter(Post.id == post_id).first()
@@ -1261,19 +1411,16 @@ async def publish_post(
     db.commit()
     db.refresh(post)
 
-    # Fan-out feed items using optimized bulk insert
+    # Fan-out in background worker
     try:
-        user_ids = _get_fanout_user_ids(db, current_user.public_id)
-        if user_ids:
-            inserted_count = bulk_insert_feed_items_safe(db, post.id, user_ids)
-            print(f"✅ Published & fanned out: {inserted_count} feed items created")
-        try:
-            await invalidate_all_feeds()
-        except Exception as e:
-            print(f"Redis invalidate skipped (publish): {e}")
+        fanout_post_to_followers.delay(post.id, current_user.id)
+    except Exception as e:
+        logger.warning("Failed to enqueue fanout task for published post %s: %s", post.id, e)
+
+    try:
         await manager.broadcast_json({"type": "NEW_POST", "post_id": post.id})
     except Exception as e:
-        print(f"⚠️ Publish fan-out failed for post {post.id}: {e}")
+        print(f"⚠️ Publish broadcast failed for post {post.id}: {e}")
 
     return PostPublishResponse(id=post.id, published_at=post.published_at, message="Published")
 
@@ -1306,7 +1453,28 @@ async def get_cursor_feed(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid cursor format")
 
-    q = db.query(FeedItem, Post).join(Post, FeedItem.post_id == Post.id).filter(
+    q = db.query(Post).join(FeedItem, FeedItem.post_id == Post.id).options(
+        joinedload(Post.author).load_only(
+            User.id,
+            User.username,
+            User.full_name,
+            User.profile_photo,
+            User.is_verified,
+        ),
+        selectinload(Post.media_items).load_only(
+            PostMedia.id,
+            PostMedia.post_id,
+            PostMedia.media_type,
+            PostMedia.url,
+            PostMedia.thumb_url,
+            PostMedia.order_index,
+            PostMedia.width,
+            PostMedia.height,
+            PostMedia.duration_seconds,
+        ),
+        selectinload(Post.likes).load_only(Like.id, Like.post_id),
+        selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+    ).filter(
         FeedItem.user_id == current_user.id,
         Post.is_published == True,
         Post.visibility.in_(["public", "private"]),
@@ -1326,7 +1494,7 @@ async def get_cursor_feed(
     rows = q.all()
 
     # Separate posts; gather IDs for like/bookmark flags
-    posts = [row[1] for row in rows[:limit]]  # first element is FeedItem, second is Post
+    posts = rows[:limit]
     post_ids = [p.id for p in posts]
 
     user_likes = {
@@ -1338,21 +1506,10 @@ async def get_cursor_feed(
         for bm in db.query(Bookmark).filter(Bookmark.user_id == current_user.id, Bookmark.post_id.in_(post_ids)).all()
     }
 
-    # Preload PostMedia items for posts that use the new media table
-    media_rows = (
-        db.query(PostMedia)
-        .filter(PostMedia.post_id.in_(post_ids))
-        .order_by(PostMedia.post_id, PostMedia.order_index)
-        .all()
-    )
-    media_map = {}
-    for m in media_rows:
-        media_map.setdefault(m.post_id, []).append(m)
-
     feed_items = []
     for post in posts:
         # Check if post has PostMedia items (new carousel system)
-        post_media_items = media_map.get(post.id, [])
+        post_media_items = post.media_items or []
         if post_media_items:
             # Use first media item from PostMedia table
             first_media = post_media_items[0]
@@ -1442,7 +1599,8 @@ import secrets
 async def start_live_session(
     data: LiveSessionCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_live_streaming_enabled),
 ):
     """Start a live streaming session (metadata only; streaming handled by external service)."""
     stream_key = secrets.token_hex(16)
@@ -1464,7 +1622,8 @@ async def start_live_session(
 async def stop_live_session(
     session_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_live_streaming_enabled),
 ):
     live = db.query(LiveSession).filter(LiveSession.id == session_id).first()
     if not live or live.host_user_id != current_user.id:
@@ -1480,7 +1639,8 @@ async def stop_live_session(
 async def list_active_live_sessions(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_live_streaming_enabled),
 ):
     lives = db.query(LiveSession).filter(LiveSession.is_active == 1).order_by(desc(LiveSession.started_at)).offset(skip).limit(limit).all()
     return lives
@@ -1491,7 +1651,8 @@ async def post_live_comment(
     session_id: int,
     data: LiveCommentCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_live_streaming_enabled),
 ):
     live = db.query(LiveSession).filter(LiveSession.id == session_id, LiveSession.is_active == 1).first()
     if not live:
@@ -1513,7 +1674,8 @@ async def post_live_comment(
 async def update_viewer_count(
     session_id: int,
     count: int = Form(..., ge=0),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_live_streaming_enabled),
 ):
     live = db.query(LiveSession).filter(LiveSession.id == session_id, LiveSession.is_active == 1).first()
     if not live:
@@ -1530,7 +1692,8 @@ async def semantic_search_posts(
     q: str = Query(..., description="Search query text"),
     limit: int = Query(20, ge=1, le=100, description="Max results to return"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_semantic_features_enabled),
 ):
     """
     Smart post/content search using semantic similarity
@@ -1540,6 +1703,13 @@ async def semantic_search_posts(
     - Much better than keyword search for finding related content
     """
     try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Semantic search is temporarily unavailable. Please try again shortly.",
+            )
+
         # Generate embedding for search query
         query_vector = embedding_service.embed_query(q)
         
@@ -1549,12 +1719,10 @@ async def semantic_search_posts(
         # Search Qdrant for similar posts
         qdrant_service = get_qdrant_service()
         if not qdrant_service:
-            return {
-                "query": q,
-                "results": [],
-                "count": 0,
-                "message": "Semantic search temporarily unavailable"
-            }
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Semantic search is temporarily unavailable. Please try again shortly.",
+            )
 
         search_results = qdrant_service.search_posts(query_vector, limit=limit)
         
@@ -1607,7 +1775,8 @@ async def find_similar_posts(
     post_id: int,
     limit: int = Query(10, ge=1, le=50, description="Max similar posts to return"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_semantic_features_enabled),
 ):
     """
     Find posts similar to a given post using AI-powered recommendations
@@ -1621,6 +1790,13 @@ async def find_similar_posts(
         post = db.query(Post).filter(Post.id == post_id).first()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
+
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Similar-post recommendations are temporarily unavailable. Please try again shortly.",
+            )
         
         # Generate embedding for the post caption
         query_vector = embedding_service.embed_query(post.content or "")
@@ -1631,12 +1807,10 @@ async def find_similar_posts(
         # Search for similar posts (excluding the source post)
         qdrant_service = get_qdrant_service()
         if not qdrant_service:
-            return {
-                "post_id": post_id,
-                "similar_posts": [],
-                "count": 0,
-                "message": "Similar-posts service temporarily unavailable"
-            }
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Similar-post recommendations are temporarily unavailable. Please try again shortly.",
+            )
 
         search_results = qdrant_service.search_posts(query_vector, limit=limit + 1)
         
@@ -1692,7 +1866,8 @@ async def get_hashtag_clusters(
     limit: int = Query(50, ge=10, le=200, description="Max hashtags to analyze"),
     num_clusters: int = Query(10, ge=3, le=20, description="Number of semantic clusters"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_semantic_features_enabled),
 ):
     """
     Semantic hashtag clustering using AI
@@ -1702,6 +1877,13 @@ async def get_hashtag_clusters(
     - Example: #AI, #MachineLearning, #DeepLearning clustered together
     """
     try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Hashtag clustering is temporarily unavailable. Please try again shortly.",
+            )
+
         # Get most used hashtags from recent posts
         from collections import Counter
         
@@ -1863,7 +2045,7 @@ async def upload_multi_media_single_post(
         try:
             blob = await file.read()
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error reading file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail="Error processing upload")
         try:
             if is_image:
                 upload_result = await cloudinary_service.upload_image(
@@ -1888,7 +2070,7 @@ async def upload_multi_media_single_post(
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Upload error for {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail="Upload failed")
 
         url = upload_result['url']
         public_id = upload_result.get('public_id')
@@ -1938,6 +2120,10 @@ async def upload_multi_media_single_post(
     )
 
     try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise RuntimeError("Embedding service unavailable")
+
         vectors = embedding_service.embed_post(
             post_id=new_post.id,
             caption=caption,
@@ -1957,9 +2143,11 @@ async def upload_multi_media_single_post(
         pass
 
     try:
-        user_ids = _get_fanout_user_ids(db, current_user.public_id)
-        if user_ids:
-            bulk_insert_feed_items_safe(db, new_post.id, user_ids)
+        fanout_post_to_followers.delay(new_post.id, current_user.id)
+    except Exception as e:
+        logger.warning("Failed to enqueue fanout task for multi-media post %s: %s", new_post.id, e)
+
+    try:
         await manager.broadcast_json({"type": "NEW_POST", "post_id": new_post.id})
     except Exception:
         pass

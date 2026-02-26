@@ -8,6 +8,7 @@ import Constants from 'expo-constants';
 // Network Configuration
 const LOCAL_IP = process.env.EXPO_PUBLIC_LOCAL_IP || '10.181.184.75';
 const API_PORT = '8000';
+const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || null;
 const TIMEOUT = 30000; // 30 seconds
 const GOOGLE_EXPO_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID || null;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || null;
@@ -29,6 +30,10 @@ const getExpoHostIp = () => {
 
 // Platform-specific API URL detection with fallback options
 const getApiUrl = () => {
+  if (EXPLICIT_API_BASE_URL) {
+    return EXPLICIT_API_BASE_URL;
+  }
+
   // Web development - use localhost
   if (Platform.OS === 'web') {
     return `http://localhost:${API_PORT}/api/v1`;
@@ -41,6 +46,10 @@ const getApiUrl = () => {
 
 // Fallback URLs for connectivity testing
 const getFallbackUrls = () => {
+  if (EXPLICIT_API_BASE_URL) {
+    return [EXPLICIT_API_BASE_URL];
+  }
+
   if (Platform.OS === 'web') {
     return [`http://localhost:${API_PORT}/api/v1`];
   }
@@ -79,19 +88,7 @@ export const API_BASE_URL = API_CONFIG.BASE_URL;
 // Development logging and diagnostics (optional - comment out for cleaner logs)
 const SHOW_CONFIG_LOGS = false; // Set to true for debugging
 if (__DEV__ && SHOW_CONFIG_LOGS) {
-  console.log('🌐 API Configuration:');
-  console.log('  📍 Base URL:', API_CONFIG.BASE_URL);
-  console.log('  📱 Platform:', Platform.OS);
-  console.log('  🔧 Dev Mode:', __DEV__);
-  console.log('  ⏱️ Timeout:', API_CONFIG.TIMEOUT + 'ms');
-  console.log('  🔄 Retry Attempts:', API_CONFIG.RETRY_ATTEMPTS);
-  console.log('  🔗 Fallback URLs:', API_CONFIG.FALLBACK_URLS);
-  console.log('');
-  console.log('🔍 Network Diagnostics:');
-  console.log('  1. Ensure backend is running on:', `http://${LOCAL_IP}:${API_PORT}`);
-  console.log('  2. Test in browser:', `http://${LOCAL_IP}:${API_PORT}/ping`);
-  console.log('  3. Check device is on same WiFi network');
-  console.log('  4. Verify no firewall is blocking port', API_PORT);
+  // Logs intentionally removed for clean output
 }
 
 // Google OAuth diagnostics (dev-only)

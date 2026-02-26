@@ -259,7 +259,7 @@ const BioBlock = memo(({ user }: { user: User }) => {
 
   const handleUrlLongPress = useCallback(() => {
     Alert.alert('Link Actions', user.externalUrl || '', [
-      { text: 'Copy', onPress: () => console.log('Copied:', user.externalUrl) },
+      { text: 'Copy' },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, [user.externalUrl]);
@@ -297,7 +297,7 @@ const DashboardCard = memo(() => {
   return (
     <TouchableOpacity
       style={[styles.dashboardCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
-      onPress={() => console.log('Dashboard pressed')}
+      onPress={() => {}}
       accessible
       accessibilityLabel="Professional dashboard"
       accessibilityRole="button"
@@ -589,12 +589,12 @@ const OverflowMenuSheet = memo(({ visible, onClose, onLogout, onSettings }: {
 
   const menuItems = [
     { icon: 'settings-outline', title: 'Settings', onPress: onSettings },
-    { icon: 'archive-outline', title: 'Archive', onPress: () => console.log('Archive') },
-    { icon: 'time-outline', title: 'Your Activity', onPress: () => console.log('Activity') },
-    { icon: 'qr-code-outline', title: 'QR Code', onPress: () => console.log('QR Code') },
-    { icon: 'bookmark-outline', title: 'Saved', onPress: () => console.log('Saved') },
-    { icon: 'people-outline', title: 'Close Friends', onPress: () => console.log('Close Friends') },
-    { icon: 'star-outline', title: 'Favorites', onPress: () => console.log('Favorites') },
+    { icon: 'archive-outline', title: 'Archive', onPress: () => {} },
+    { icon: 'time-outline', title: 'Your Activity', onPress: () => {} },
+    { icon: 'qr-code-outline', title: 'QR Code', onPress: () => {} },
+    { icon: 'bookmark-outline', title: 'Saved', onPress: () => {} },
+    { icon: 'people-outline', title: 'Close Friends', onPress: () => {} },
+    { icon: 'star-outline', title: 'Favorites', onPress: () => {} },
     { icon: 'log-out-outline', title: 'Log out', onPress: onLogout, danger: true },
   ];
 
@@ -810,16 +810,14 @@ export default function ProfileScreen({
   const handlePostPress = useCallback((post: Post) => {
     if (navigation) {
       navigation.navigate('PostDetail', { postId: post.id });
-    } else {
-      console.log('Post pressed:', post.id);
     }
   }, [navigation]);
 
   const handlePostLongPress = useCallback((post: Post) => {
     Alert.alert('Post Actions', `Post ${post.id}`, [
-      { text: 'Share', onPress: () => console.log('Share post:', post.id) },
-      { text: 'Copy Link', onPress: () => console.log('Copy link:', post.id) },
-      { text: 'Report', onPress: () => console.log('Report post:', post.id), style: 'destructive' },
+      { text: 'Share' },
+      { text: 'Copy Link' },
+      { text: 'Report', style: 'destructive' },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, []);
@@ -845,7 +843,6 @@ export default function ProfileScreen({
 
   const handleLoadMore = useCallback(() => {
     if (!loading) {
-      console.log('Load more posts...');
       // Implement pagination here
     }
   }, [loading]);
@@ -853,15 +850,13 @@ export default function ProfileScreen({
   const handleEditProfile = useCallback(() => {
     if (navigation) {
       navigation.navigate('EditProfile');
-    } else {
-      console.log('Edit Profile');
     }
   }, [navigation]);
 
   const handleShareProfile = useCallback(() => {
     Alert.alert('Share Profile', `Share ${user?.username}'s profile`, [
-      { text: 'Copy Link', onPress: () => console.log('Copy profile link') },
-      { text: 'Share via...', onPress: () => console.log('Share sheet') },
+      { text: 'Copy Link' },
+      { text: 'Share via...' },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, [user]);
@@ -869,8 +864,6 @@ export default function ProfileScreen({
   const handleMessage = useCallback(() => {
     if (navigation && user) {
       navigation.navigate('Chat', { userId: user.id, username: user.username });
-    } else {
-      console.log('Message user');
     }
   }, [navigation, user]);
 
@@ -899,24 +892,18 @@ export default function ProfileScreen({
   const handleNotifications = useCallback(() => {
     if (navigation) {
       navigation.navigate('Notifications');
-    } else {
-      console.log('Notifications');
     }
   }, [navigation]);
 
   const handleNewPost = useCallback(() => {
     if (navigation) {
       navigation.navigate('CreateContent');
-    } else {
-      console.log('Create new post');
     }
   }, [navigation]);
 
   const handleSettings = useCallback(() => {
     if (navigation) {
       navigation.navigate('Settings');
-    } else {
-      console.log('Settings');
     }
   }, [navigation]);
 
@@ -963,14 +950,14 @@ export default function ProfileScreen({
           uri={user.avatarUrl}
           size={86}
           hasStory={user.hasStory}
-          onPress={() => console.log('Avatar pressed')}
+          onPress={() => {}}
         />
 
         <View style={styles.statsRow}>
           <Stat
             label="Posts"
             value={user.posts}
-            onPress={() => console.log('Posts')}
+            onPress={() => {}}
           />
           <Stat
             label="Followers"
@@ -1056,7 +1043,7 @@ export default function ProfileScreen({
             <StoryHighlight
               key={highlight.id}
               highlight={highlight}
-              onPress={() => console.log('Highlight:', highlight.title)}
+              onPress={() => {}}
             />
           ))}
         </ScrollView>

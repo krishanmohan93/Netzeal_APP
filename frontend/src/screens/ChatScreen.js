@@ -20,11 +20,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { chatAPI } from '../services/chatApi';
 import { timeAgo } from '../utils/formatters';
 import { normalizeUri } from '../utils/media';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const ChatScreen = ({ route, navigation }) => {
   const { conversationId, conversationTitle, userId, username, name } = route.params || {};
-  
-  console.log('ChatScreen params:', { conversationId, conversationTitle, userId, username, name });
   
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -59,8 +58,7 @@ const ChatScreen = ({ route, navigation }) => {
           });
           return; // Wait for next effect run
         } catch (e) {
-          console.error('Failed to ensure conversation:', e);
-          Alert.alert('Error', 'Unable to start conversation');
+          Alert.alert('Unable to start chat', getUserFacingError(e, 'Please try again.'));
           setLoading(false);
           return;
         }
@@ -97,22 +95,19 @@ const ChatScreen = ({ route, navigation }) => {
         setCurrentUserId(userData.id);
       }
     } catch (err) {
-      console.error('Failed to load user data:', err);
+      // non-blocking
     }
   };
 
   const loadMessages = async (cursor = null) => {
     try {
-      console.log('loadMessages called with conversationId:', conversationId, 'cursor:', cursor);
       if (cursor) {
         setLoadingMore(true);
       }
       if (!conversationId) {
-        console.log('No conversationId, skipping loadMessages');
         return; // Guard until conversation is resolved
       }
       const data = await chatAPI.getMessages(conversationId, cursor);
-      console.log('Messages loaded:', data);
       
       if (cursor) {
         setMessages(prev => [...prev, ...data.items]);
@@ -131,8 +126,7 @@ const ChatScreen = ({ route, navigation }) => {
         }
       }
     } catch (err) {
-      console.error('Failed to load messages:', err);
-      Alert.alert('Error', 'Failed to load messages');
+      Alert.alert('Unable to load messages', getUserFacingError(err, 'Please try again.'));
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -157,7 +151,6 @@ const ChatScreen = ({ route, navigation }) => {
       wsRef.current = new WebSocket(wsUrl);
       
       wsRef.current.onopen = () => {
-        console.log('WebSocket connected');
         // Join this conversation room
         wsRef.current.send(JSON.stringify({
           type: 'JOIN_ROOM',
@@ -170,17 +163,16 @@ const ChatScreen = ({ route, navigation }) => {
         handleWebSocketMessage(message);
       };
       
-      wsRef.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
+      wsRef.current.onerror = () => {
+        // Keep silent; fallback polling/load still works
       };
       
       wsRef.current.onclose = () => {
-        console.log('WebSocket disconnected');
         // Attempt reconnect after 3 seconds
         setTimeout(connectWebSocket, 3000);
       };
     } catch (err) {
-      console.error('Failed to connect WebSocket:', err);
+      // non-blocking
     }
   };
 
@@ -294,8 +286,7 @@ const ChatScreen = ({ route, navigation }) => {
       
       // Message will be added via WebSocket NEW_MESSAGE event
     } catch (err) {
-      console.error('Failed to send message:', err);
-      Alert.alert('Error', 'Failed to send message');
+      Alert.alert('Message not sent', getUserFacingError(err, 'Please try again.'));
       setInputText(content); // Restore text on error
     } finally {
       setSending(false);
@@ -391,6 +382,13 @@ const ChatScreen = ({ route, navigation }) => {
             </View>
           ) : null
         }
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Ionicons name="chatbubble-ellipses-outline" size={56} color="#CCC" />
+            <Text style={styles.emptyTitle}>No messages yet</Text>
+            <Text style={styles.emptySubtitle}>Start the conversation with a quick hello.</Text>
+          </View>
+        }
         contentContainerStyle={messages.length === 0 ? styles.emptyContainer : styles.messagesList}
       />
 
@@ -464,6 +462,20 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    marginTop: 12,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+  },
+  emptySubtitle: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#999',
   },
   messageRow: {
     flexDirection: 'row',

@@ -13,22 +13,28 @@ import { useNavigation } from '@react-navigation/native';
 import { notificationsAPI } from '../services/api';
 import { colors } from '../utils/theme';
 import { normalizeUri } from '../utils/media';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [pendingReadId, setPendingReadId] = useState(null);
+  const [retrying, setRetrying] = useState(false);
 
   const fetchNotifications = useCallback(async () => {
     try {
+      setError(null);
       const data = await notificationsAPI.list();
       setNotifications(data || []);
     } catch (error) {
-      console.error("Failed to fetch notifications", error);
+      setError(getUserFacingError(error, 'Could not load notifications. Please try again.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setRetrying(false);
     }
   }, []);
 
@@ -43,12 +49,17 @@ const NotificationsScreen = () => {
 
   const handlePress = async (item) => {
     // Mark read
-    if (!item.is_read) {
+    if (!item.is_read && pendingReadId !== item.id) {
       try {
+        setPendingReadId(item.id);
         await notificationsAPI.markRead(item.id);
         // Optimistic update
         setNotifications(prev => prev.map(n => n.id === item.id ? { ...n, is_read: true } : n));
-      } catch (e) { }
+      } catch (e) {
+        // non-blocking
+      } finally {
+        setPendingReadId(null);
+      }
     }
 
     // Navigate logic
@@ -68,12 +79,13 @@ const NotificationsScreen = () => {
     <TouchableOpacity
       style={[styles.item, !item.is_read && styles.unreadItem]}
       onPress={() => handlePress(item)}
+      disabled={pendingReadId === item.id}
     >
       <Image
         source={{ uri: normalizeUri(item.sender?.profile_photo) || 'https://via.placeholder.com/50' }}
         style={styles.avatar}
       />
-      <View style={styles.content}>
+      <View style={[styles.content, pendingReadId === item.id && { opacity: 0.6 }]}>
         <Text style={styles.text}>
           <Text style={styles.username}>{item.sender?.username} </Text>
           {item.text || 'New notification'}
@@ -87,6 +99,24 @@ const NotificationsScreen = () => {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.emptyText}>{error}</Text>
+        <TouchableOpacity
+          style={[styles.retryButton, retrying && styles.buttonDisabled]}
+          onPress={() => {
+            setRetrying(true);
+            fetchNotifications();
+          }}
+          disabled={retrying}
+        >
+          {retrying ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.retryText}>Retry</Text>}
+        </TouchableOpacity>
       </View>
     );
   }
@@ -155,6 +185,20 @@ const styles = StyleSheet.create({
   emptyText: {
     color: '#999',
     fontSize: 16,
+  },
+  retryButton: {
+    marginTop: 14,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  retryText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
 });
 

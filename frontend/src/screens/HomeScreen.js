@@ -29,8 +29,18 @@ import FullscreenMediaViewer from '../components/FullscreenMediaViewer';
 import { colors, spacing, borderRadius, shadows } from '../utils/theme';
 import { contentAPI, authAPI } from '../services/api';
 import { normalizeUri } from '../utils/media';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const { width } = Dimensions.get('window');
+
+const SKELETON_ROWS = [1, 2, 3];
+
+const mergeUniquePosts = (existing, incoming) => {
+  if (!Array.isArray(incoming) || incoming.length === 0) return existing;
+  const seen = new Set(existing.map((item) => item.id));
+  const additions = incoming.filter((item) => !seen.has(item.id));
+  return additions.length ? [...existing, ...additions] : existing;
+};
 
 // Dummy data for posts
 const DUMMY_POSTS = [
@@ -108,7 +118,7 @@ const DUMMY_POSTS = [
   },
 ];
 
-const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit, currentUserId, onOpenFullscreen }) => {
+const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit, currentUserId, onOpenFullscreen, likePending, commentPending }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [videoError, setVideoError] = useState(false);
@@ -158,7 +168,7 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
             title: title
           });
         } catch (error) {
-          console.error('Share error:', error);
+          Alert.alert('Share unavailable', getUserFacingError(error, 'Please try again.'));
         }
         break;
     }
@@ -286,8 +296,9 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
         {/* Action Buttons Row */}
         <View style={styles.actionRow}>
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.actionButton, likePending && { opacity: 0.6 }]}
             onPress={() => onLike(post.id)}
+            disabled={likePending}
           >
             <Icon
               name={post.is_liked ? 'thumbs-up' : 'thumbs-up-outline'}
@@ -298,8 +309,9 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.actionButton, commentPending && { opacity: 0.6 }]}
             onPress={() => onComment && onComment(post)}
+            disabled={commentPending}
           >
             <Icon name="chatbubble-outline" size={24} color={colors.textSecondary} />
             <Text style={styles.actionText}>{post.comments_count || 0}</Text>
@@ -359,7 +371,11 @@ const HomeScreen = ({ navigation }) => {
   const [posts, setPosts] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [likePendingMap, setLikePendingMap] = useState({});
+  const [commentPendingMap, setCommentPendingMap] = useState({});
   const wsRef = useRef(null);
+  const prefetchedPageRef = useRef(null);
+  const prefetchInFlightRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -407,24 +423,45 @@ const HomeScreen = ({ navigation }) => {
         // User not authenticated, skip logging
         return;
       }
-      console.error('Error loading user data:', error.message);
+    }
+  };
+
+  const prefetchNextPage = async (cursor) => {
+    if (!cursor || prefetchInFlightRef.current) return;
+    prefetchInFlightRef.current = true;
+    try {
+      const resp = await contentAPI.getCursorFeed(cursor, 20);
+      prefetchedPageRef.current = {
+        cursor,
+        items: Array.isArray(resp?.items) ? resp.items : [],
+        nextCursor: resp?.next_cursor || null,
+      };
+    } catch (e) {
+      prefetchedPageRef.current = null;
+    } finally {
+      prefetchInFlightRef.current = false;
     }
   };
 
   const loadInitialFeed = async () => {
     try {
       const resp = await contentAPI.getCursorFeed(null, 20);
-      console.log('📥 Cursor feed loaded:', resp.items.length, 'posts');
       setPosts(resp.items);
-      setNextCursor(resp.next_cursor || null);
+      const cursor = resp.next_cursor || null;
+      setNextCursor(cursor);
+      prefetchedPageRef.current = null;
+      prefetchNextPage(cursor);
     } catch (error) {
       // Silently handle auth errors - user will be redirected to login
       if (error.response?.status === 401) {
         setPosts([]);
+        setNextCursor(null);
+        prefetchedPageRef.current = null;
         return;
       }
-      console.error('Error loading cursor feed:', error.message);
-      setPosts(DUMMY_POSTS);
+      setPosts((prev) => (prev.length ? prev : DUMMY_POSTS));
+      setNextCursor(null);
+      prefetchedPageRef.current = null;
     } finally {
       setLoading(false);
     }
@@ -434,9 +471,20 @@ const HomeScreen = ({ navigation }) => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const resp = await contentAPI.getCursorFeed(nextCursor, 20);
-      setPosts(prev => [...prev, ...resp.items]);
-      setNextCursor(resp.next_cursor);
+      const prefetched = prefetchedPageRef.current;
+      if (prefetched && prefetched.cursor === nextCursor) {
+        setPosts((prev) => mergeUniquePosts(prev, prefetched.items));
+        setNextCursor(prefetched.nextCursor || null);
+        prefetchedPageRef.current = null;
+        prefetchNextPage(prefetched.nextCursor || null);
+      } else {
+        const resp = await contentAPI.getCursorFeed(nextCursor, 20);
+        setPosts((prev) => mergeUniquePosts(prev, resp.items));
+        const cursor = resp.next_cursor || null;
+        setNextCursor(cursor);
+        prefetchedPageRef.current = null;
+        prefetchNextPage(cursor);
+      }
     } catch (e) {
       // Silently handle pagination errors
     } finally {
@@ -499,24 +547,96 @@ const HomeScreen = ({ navigation }) => {
   };
 
   const handleLike = async (postId) => {
+    if (likePendingMap[postId]) return;
+
+    const targetPost = posts.find((post) => post.id === postId);
+    if (!targetPost) return;
+
+    const wasLiked = !!targetPost.is_liked;
+    setLikePendingMap((prev) => ({ ...prev, [postId]: true }));
+
+    setPosts((prevPosts) =>
+      prevPosts.map((post) =>
+        post.id === postId
+          ? {
+            ...post,
+            is_liked: !wasLiked,
+            likes_count: Math.max(0, (post.likes_count || 0) + (wasLiked ? -1 : 1)),
+          }
+          : post
+      )
+    );
+
     try {
-      const post = posts.find(p => p.id === postId);
-      if (post.is_liked) {
+      if (wasLiked) {
         await contentAPI.unlikePost(postId);
       } else {
         await contentAPI.likePost(postId);
       }
-
-      // Update UI
-      setPosts(posts.map(p =>
-        p.id === postId
-          ? { ...p, is_liked: !p.is_liked, likes_count: p.is_liked ? p.likes_count - 1 : p.likes_count + 1 }
-          : p
-      ));
     } catch (error) {
-      console.error('Error liking post:', error);
-      Alert.alert('Error', 'Could not like post');
+      setPosts((prevPosts) =>
+        prevPosts.map((post) =>
+          post.id === postId
+            ? {
+              ...post,
+              is_liked: wasLiked,
+              likes_count: Math.max(0, (post.likes_count || 0) + (wasLiked ? 1 : -1)),
+            }
+            : post
+        )
+      );
+      Alert.alert('Could not update like', getUserFacingError(error, 'Please try again.'));
+    } finally {
+      setLikePendingMap((prev) => {
+        const next = { ...prev };
+        delete next[postId];
+        return next;
+      });
     }
+  };
+
+  const submitQuickComment = async (postId, content) => {
+    if (!content || commentPendingMap[postId]) return;
+
+    setCommentPendingMap((prev) => ({ ...prev, [postId]: true }));
+    setPosts((prevPosts) =>
+      prevPosts.map((post) =>
+        post.id === postId
+          ? { ...post, comments_count: Math.max(0, (post.comments_count || 0) + 1) }
+          : post
+      )
+    );
+
+    try {
+      await contentAPI.createComment(postId, content);
+    } catch (error) {
+      setPosts((prevPosts) =>
+        prevPosts.map((post) =>
+          post.id === postId
+            ? { ...post, comments_count: Math.max(0, (post.comments_count || 0) - 1) }
+            : post
+        )
+      );
+      Alert.alert('Could not post comment', getUserFacingError(error, 'Please try again.'));
+    } finally {
+      setCommentPendingMap((prev) => {
+        const next = { ...prev };
+        delete next[postId];
+        return next;
+      });
+    }
+  };
+
+  const handleComment = (post) => {
+    Alert.alert(
+      'Quick Comment',
+      'Choose a quick reply',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: '👏 Great post', onPress: () => submitQuickComment(post.id, '👏 Great post!') },
+        { text: '🔥 Love this', onPress: () => submitQuickComment(post.id, '🔥 Love this!') },
+      ]
+    );
   };
 
   const handleDeletePost = async (postId) => {
@@ -540,11 +660,8 @@ const HomeScreen = ({ navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
-              console.log('🗑️ Starting delete for post:', postId);
-
               // Call delete API
               const result = await contentAPI.deletePost(postId);
-              console.log('✅ Delete successful:', result);
 
               // Update local state - remove deleted post
               setPosts(prevPosts => prevPosts.filter(p => p.id !== postId));
@@ -555,7 +672,7 @@ const HomeScreen = ({ navigation }) => {
               // Silently log delete errors - show user-friendly messages only
 
               // User-friendly error messages
-              let errorMessage = 'Could not delete post';
+              let errorMessage = getUserFacingError(error, 'Could not delete post');
               if (error.response?.status === 403) {
                 errorMessage = 'You are not authorized to delete this post';
               } else if (error.response?.status === 404) {
@@ -638,9 +755,15 @@ const HomeScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={{ marginTop: 10, color: colors.textSecondary }}>Loading feed...</Text>
+      <View style={styles.container}>
+        <FlatList
+          data={SKELETON_ROWS}
+          keyExtractor={(item) => `skeleton-${item}`}
+          renderItem={() => <FeedSkeletonCard />}
+          ListHeaderComponent={renderHeader}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
       </View>
     );
   }
@@ -654,12 +777,14 @@ const HomeScreen = ({ navigation }) => {
           <PostCard
             post={item}
             onLike={handleLike}
-            onComment={(post) => Alert.alert('Comments', 'Comment feature coming soon!')}
+            onComment={handleComment}
             onShare={(post, type) => Alert.alert('Share', `Sharing to ${type}`)}
             onRepost={(post) => Alert.alert('Repost', 'Repost feature coming soon!')}
             onDelete={handleDeletePost}
             onEdit={handleEditPost}
             currentUserId={currentUserId}
+            likePending={!!likePendingMap[item.id]}
+            commentPending={!!commentPendingMap[item.id]}
             onOpenFullscreen={(idx) => {
               if (Array.isArray(item.media_items) && item.media_items.length) {
                 setFullscreen({ visible: true, items: item.media_items, index: idx });
@@ -701,6 +826,7 @@ const HomeScreen = ({ navigation }) => {
                 gap: 8
               }}
               onPress={() => navigation.navigate('Search')}
+              disabled={refreshing || loadingMore}
             >
               <Icon name="search" size={20} color="#FFFFFF" />
               <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600' }}>
@@ -1042,6 +1168,74 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.6)'
   },
+  skeletonCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#EFEFEF',
+    marginBottom: spacing.md,
+  },
+  skeletonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+  },
+  skeletonAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.border,
+    marginRight: spacing.sm,
+  },
+  skeletonLine: {
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.border,
+  },
+  skeletonMedia: {
+    width: '100%',
+    height: 360,
+    backgroundColor: colors.background,
+  },
+  skeletonContent: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  skeletonActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  skeletonAction: {
+    width: 64,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: colors.border,
+  },
 });
+
+const FeedSkeletonCard = () => (
+  <View style={styles.skeletonCard}>
+    <View style={styles.skeletonHeader}>
+      <View style={styles.skeletonAvatar} />
+      <View style={[styles.skeletonLine, { width: 120 }]} />
+    </View>
+    <View style={styles.skeletonMedia} />
+    <View style={styles.skeletonContent}>
+      <View style={[styles.skeletonLine, { width: '72%', height: 16 }]} />
+      <View style={[styles.skeletonLine, { width: '92%' }]} />
+      <View style={[styles.skeletonLine, { width: '62%' }]} />
+    </View>
+    <View style={styles.skeletonActions}>
+      <View style={styles.skeletonAction} />
+      <View style={styles.skeletonAction} />
+      <View style={styles.skeletonAction} />
+    </View>
+  </View>
+);
 
 export default HomeScreen;

@@ -1,11 +1,17 @@
 """
 Main FastAPI application
 """
-from fastapi import FastAPI, WebSocket, Query
+from fastapi import FastAPI, WebSocket, Query, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from contextlib import asynccontextmanager
 from .core.config import settings
-from .core.database import engine, Base
+from .core.database import engine, Base, SessionLocal
+from sqlalchemy import text
 from .routers import auth, content, ai, social, collab, ai_dual, chat, websocket, network, notifications
 # from .routers import recommend  # Temporarily disabled due to sentence-transformers blocking
 from .utils.ws import manager
@@ -22,28 +28,42 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     description="AI-Powered Professional Growth Platform",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    debug=False,
 )
 
-# Configure CORS for mobile development
+if settings.FORCE_HTTPS:
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+if settings.GZIP_ENABLED:
+    app.add_middleware(GZipMiddleware, minimum_size=settings.GZIP_MINIMUM_SIZE_BYTES)
+
+trusted_hosts = settings.allowed_hosts_list
+if trusted_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
+
+# Configure CORS
+cors_origins = settings.cors_origins_list
+if settings.DEBUG and not cors_origins:
+    cors_origins = [
+        "http://localhost:8081",
+        "http://localhost:8082",
+        "http://localhost:8083",
+        "http://localhost:8084",
+        "http://10.92.161.75:8081",
+        "http://10.92.161.75:8082",
+        "http://10.92.161.75:8083",
+        "http://10.92.161.75:8084",
+        "exp://10.92.161.75:8081",
+        "exp://10.92.161.75:8082",
+        "exp://10.92.161.75:8083",
+        "exp://10.92.161.75:8084",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "*",  # Allow all origins for development
-        "http://localhost:8081", # Expo default
-        "http://localhost:8082", # Expo alternative port
-        "http://localhost:8083", # Expo port 8083
-        "http://localhost:8084", # Expo port 8084
-        "http://10.92.161.75:8081", # Network IP
-        "http://10.92.161.75:8082", # Network IP alternative
-        "http://10.92.161.75:8083", # Network IP port 8083
-        "http://10.92.161.75:8084", # Network IP port 8084
-        "exp://10.92.161.75:8081", # Expo protocol
-        "exp://10.92.161.75:8082", # Expo protocol alternative
-        "exp://10.92.161.75:8083", # Expo protocol port 8083
-        "exp://10.92.161.75:8084", # Expo protocol port 8084
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=[
@@ -56,6 +76,86 @@ app.add_middleware(
     ],
     expose_headers=["*"],
 )
+
+
+def _error_payload(code: str, message: str, details=None) -> dict:
+    payload = {
+        "error": {
+            "code": code,
+            "message": message,
+        },
+        "detail": message,
+    }
+    if details is not None and settings.DEBUG:
+        payload["details"] = details
+    return payload
+
+
+@app.middleware("http")
+async def enforce_request_guards(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > settings.MAX_REQUEST_SIZE_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content=_error_payload("payload_too_large", "Request payload too large"),
+                )
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content=_error_payload("invalid_content_length", "Invalid content-length header"),
+            )
+
+    try:
+        return await asyncio.wait_for(call_next(request), timeout=settings.REQUEST_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content=_error_payload("request_timeout", "Request timed out"),
+        )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if not settings.SECURE_RESPONSE_HEADERS:
+        return response
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["X-XSS-Protection"] = "0"
+    if settings.FORCE_HTTPS:
+        response.headers["Strict-Transport-Security"] = f"max-age={settings.HSTS_MAX_AGE}; includeSubDomains"
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content=_error_payload("internal_error", "Internal server error"),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    message = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_payload("http_error", message, details=exc.detail),
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content=_error_payload("validation_error", "Validation failed", details=exc.errors()),
+    )
 
 # Include routers
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
@@ -87,6 +187,19 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/health/ready")
+async def health_ready_check():
+    """Readiness endpoint with DB check for production probes"""
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready", "database": "ok"}
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "database": "down"})
+    finally:
+        db.close()
+
+
 @app.get(f"{settings.API_V1_PREFIX}/ping")
 async def ping():
     """Ping endpoint for connectivity testing"""
@@ -95,7 +208,7 @@ async def ping():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)
 
 
 @app.websocket("/ws")

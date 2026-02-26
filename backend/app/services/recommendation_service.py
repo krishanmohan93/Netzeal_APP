@@ -9,6 +9,9 @@ from .groq_deepseek_service import AIService
 import json
 from datetime import datetime, timedelta
 from collections import Counter
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RecommendationService:
@@ -154,7 +157,7 @@ class RecommendationService:
         user_id: int
     ) -> List[Dict]:
         """
-        Recommend courses based on user profile using Groq AI
+        Recommend courses based on user profile using AI service
         
         Args:
             db: Database session
@@ -170,7 +173,6 @@ class RecommendationService:
         skills = user.skills or []
         interests = user.interests or []
         
-        # Use Groq to generate course recommendations
         prompt = f"""Based on this developer profile, suggest 5 relevant online courses:
 Skills: {', '.join(skills)}
 Interests: {', '.join(interests)}
@@ -217,7 +219,7 @@ Format as a simple numbered list."""
             return courses[:5]
             
         except Exception as e:
-            print(f"Error generating course recommendations: {e}")
+            logger.exception("Error generating course recommendations: %s", e)
             return []
     
     async def get_trending_content(

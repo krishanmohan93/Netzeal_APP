@@ -20,6 +20,7 @@ import { colors, spacing } from '../utils/theme';
 import { chatAPI } from '../services/chatApi';
 import { timeAgo } from '../utils/formatters';
 import { normalizeUri } from '../utils/media';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const getInitials = (name = '') => {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -119,6 +120,7 @@ const MyWorkScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [retrying, setRetrying] = useState(false);
 
   const loadCurrentUser = useCallback(async () => {
     try {
@@ -128,7 +130,7 @@ const MyWorkScreen = ({ navigation }) => {
         setCurrentUserId(userData.id);
       }
     } catch (err) {
-      console.error('Failed to load user data:', err);
+      setError((prev) => prev || getUserFacingError(err, 'Unable to load your account details.'));
     }
   }, []);
 
@@ -138,11 +140,11 @@ const MyWorkScreen = ({ navigation }) => {
       const data = await chatAPI.getConversations();
       setConversations(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('Failed to load conversations:', err);
-      setError('Failed to load conversations');
+      setError(getUserFacingError(err, 'Could not load conversations. Please try again.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setRetrying(false);
     }
   }, []);
 
@@ -214,8 +216,11 @@ const MyWorkScreen = ({ navigation }) => {
       <View style={styles.centerContainer}>
         <Icon name="alert-circle" size={48} color="#999" />
         <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={loadConversations}>
-          <Text style={styles.retryText}>Retry</Text>
+        <TouchableOpacity style={[styles.retryButton, retrying && styles.buttonDisabled]} onPress={() => {
+          setRetrying(true);
+          loadConversations();
+        }} disabled={retrying}>
+          {retrying ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.retryText}>Retry</Text>}
         </TouchableOpacity>
       </View>
     );
@@ -439,6 +444,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
 });
 

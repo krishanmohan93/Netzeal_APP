@@ -1,0 +1,13 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Cloud/OAuth/Firebase credential files
+*serviceAccount*.json
+*client_secret*.json
+*google*credentials*.json
+*firebase*adminsdk*.json
+*.pem
+*.p12
+*.key

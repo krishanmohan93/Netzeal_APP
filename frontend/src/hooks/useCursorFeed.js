@@ -131,25 +131,21 @@ export const useCursorFeed = ({ autoLoad = true, onError = null } = {}) => {
         .replace('/api/v1', '/ws');
       const wsUrl = `${wsUrlBase}?token=${encodeURIComponent(token)}`;
 
-      console.log('🔌 Connecting WebSocket:', wsUrlBase);
-
       try {
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-          console.log('✅ WebSocket connected');
+          // connected
         };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('📨 WebSocket message:', data);
 
             if (data.type === 'NEW_POST' && data.post_id) {
               // Optionally fetch and prepend the new post
               // For now, just trigger a refresh or show notification
-              console.log('🆕 New post published:', data.post_id);
               // You could implement: refresh() or fetch single post and prepend
             }
           } catch (err) {
@@ -162,7 +158,7 @@ export const useCursorFeed = ({ autoLoad = true, onError = null } = {}) => {
         };
 
         ws.onclose = () => {
-          console.log('🔌 WebSocket closed');
+          // closed
         };
       } catch (err) {
         console.error('Failed to create WebSocket:', err);

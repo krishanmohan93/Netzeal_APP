@@ -8,6 +8,10 @@ from .user import (
     UserProfileResponse,
     Token,
     TokenData,
+    RefreshTokenRequest,
+    VerifyEmailRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
 )
 from .content import (
     PostCreate,
@@ -33,6 +37,10 @@ __all__ = [
     "UserProfileResponse",
     "Token",
     "TokenData",
+    "RefreshTokenRequest",
+    "VerifyEmailRequest",
+    "ForgotPasswordRequest",
+    "ResetPasswordRequest",
     "PostCreate",
     "PostUpdate",
     "PostResponse",

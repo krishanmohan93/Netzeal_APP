@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG } from '../config/environment';
 import { setAuthToken, clearAuthTokens } from '../services/api';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const AuthContext = createContext({});
 
@@ -33,11 +34,10 @@ export const AuthProvider = ({ children }) => {
         return response;
       } catch (err) {
         lastNetworkError = err;
-        console.warn(`⚠️ Network failed for ${url}`);
       }
     }
 
-    throw new Error(lastNetworkError?.message || 'Network error. Please check backend connection.');
+    throw new Error(getUserFacingError(lastNetworkError, 'You appear to be offline. Please check your connection.'));
   };
 
   const readResponseBody = async (response) => {
@@ -82,10 +82,9 @@ export const AuthProvider = ({ children }) => {
           refresh: savedRefreshToken,
         });
         setUser(JSON.parse(savedUser));
-        console.log('✅ Session restored from storage');
       }
     } catch (error) {
-      console.error('❌ Failed to restore session:', error);
+      setError(getUserFacingError(error, 'Unable to restore your session.'));
     } finally {
       setLoading(false);
     }
@@ -103,9 +102,8 @@ export const AuthProvider = ({ children }) => {
       });
       setUser(userData);
       setError(null);
-      console.log('✅ Session saved');
     } catch (error) {
-      console.error('❌ Failed to save session:', error);
+      setError(getUserFacingError(error, 'Could not save your session. Please try again.'));
       throw error;
     }
   };
@@ -119,9 +117,8 @@ export const AuthProvider = ({ children }) => {
       setTokens({ access: null, refresh: null });
       setUser(null);
       setError(null);
-      console.log('✅ Session cleared');
     } catch (error) {
-      console.error('❌ Failed to clear session:', error);
+      setError(getUserFacingError(error, 'Could not clear local session.'));
     }
   };
 
@@ -156,12 +153,10 @@ export const AuthProvider = ({ children }) => {
       }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
-      console.log('✅ Registration successful');
       return { success: true, user: data.user };
     } catch (error) {
-      const errorMessage = error.message || 'Registration failed';
+      const errorMessage = getUserFacingError(error, 'Registration failed. Please try again.');
       setError(errorMessage);
-      console.error('❌ Registration error:', errorMessage);
       return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
@@ -197,12 +192,10 @@ export const AuthProvider = ({ children }) => {
       }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
-      console.log('✅ Login successful');
       return { success: true, user: data.user };
     } catch (error) {
-      const errorMessage = error.message || 'Login failed';
+      const errorMessage = getUserFacingError(error, 'Login failed. Please try again.');
       setError(errorMessage);
-      console.error('❌ Login error:', errorMessage);
       return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
@@ -237,18 +230,14 @@ export const AuthProvider = ({ children }) => {
       }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
-      console.log('✅ Google sign-in successful', {
-        isNewUser: data.is_new_user,
-      });
       return {
         success: true,
         user: data.user,
         isNewUser: data.is_new_user,
       };
     } catch (error) {
-      const errorMessage = error.message || 'Google sign-in failed';
+      const errorMessage = getUserFacingError(error, 'Google sign-in failed. Please try again.');
       setError(errorMessage);
-      console.error('❌ Google sign-in error:', errorMessage);
       return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
@@ -258,7 +247,6 @@ export const AuthProvider = ({ children }) => {
   // Refresh access token
   const refreshAccessToken = async () => {
     if (!tokens.refresh) {
-      console.error('❌ No refresh token available');
       return false;
     }
 
@@ -285,10 +273,9 @@ export const AuthProvider = ({ children }) => {
       }
       await saveSession(data.access_token, data.refresh_token, data.user);
 
-      console.log('✅ Token refreshed');
       return true;
     } catch (error) {
-      console.error('❌ Token refresh failed:', error);
+      setError(getUserFacingError(error, 'Session expired. Please sign in again.'));
       await clearSession();
       return false;
     }
@@ -310,10 +297,8 @@ export const AuthProvider = ({ children }) => {
       }
 
       await clearSession();
-      console.log('✅ Logged out successfully');
       return { success: true };
     } catch (error) {
-      console.error('❌ Logout error:', error);
       // Still clear local session even if backend logout fails
       await clearSession();
       return { success: true };

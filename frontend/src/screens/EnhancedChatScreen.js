@@ -171,7 +171,7 @@ const EnhancedChatScreen = ({ route, navigation }) => {
    */
   function handlePresenceUpdate(data) {
     // Update user online status in UI
-    console.log('Presence update:', data);
+    void data;
   }
   
   /**

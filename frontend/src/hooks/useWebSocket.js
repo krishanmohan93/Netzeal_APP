@@ -18,9 +18,9 @@
  *   sendTyping,
  *   sendReadReceipt
  * } = useWebSocket({
- *   onMessage: (message) => console.log('New message:', message),
- *   onTyping: (data) => console.log('User typing:', data),
- *   onReadReceipt: (data) => console.log('Message read:', data)
+ *   onMessage: (message) => {/* handle */},
+ *   onTyping: (data) => {/* handle */},
+ *   onReadReceipt: (data) => {/* handle */}
  * });
  */
 
@@ -179,7 +179,7 @@ export const useWebSocket = ({
       
       switch (type) {
         case 'CONNECTION_SUCCESS':
-          console.log('✅ WebSocket connected:', payload.connection_id);
+          // connection acknowledged by server
           setIsConnected(true);
           setConnectionState('connected');
           setReconnectAttempts(0);
@@ -230,11 +230,9 @@ export const useWebSocket = ({
           break;
         
         case 'ROOM_JOINED':
-          console.log('📌 Joined room:', payload.room_id);
           break;
         
         case 'ROOM_LEFT':
-          console.log('📌 Left room:', payload.room_id);
           pendingRoomsRef.current.delete(payload.room_id);
           break;
         
@@ -293,7 +291,7 @@ export const useWebSocket = ({
       // Build WebSocket URL with auth token
       const wsUrl = `${WS_CONFIG.getWebSocketUrl()}?token=${encodeURIComponent(token)}`;
       
-      console.log(`🔌 Connecting to WebSocket... (Attempt ${reconnectAttempts + 1})`);
+      // connecting
       
       // Create WebSocket connection
       const ws = new WebSocket(wsUrl);
@@ -310,7 +308,7 @@ export const useWebSocket = ({
       
       // Event handlers
       ws.onopen = () => {
-        console.log('✅ WebSocket connection established');
+        // connected
         // CONNECTION_SUCCESS message will be sent by server
       };
       
@@ -323,7 +321,6 @@ export const useWebSocket = ({
       };
       
       ws.onclose = (event) => {
-        console.log(`🔌 WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
         setIsConnected(false);
         setConnectionState('disconnected');
         stopHeartbeat();
@@ -365,7 +362,7 @@ export const useWebSocket = ({
       WS_CONFIG.MAX_RECONNECT_DELAY
     );
     
-    console.log(`⏳ Scheduling reconnect in ${delay}ms`);
+    // reconnect scheduled
     
     reconnectTimeoutRef.current = setTimeout(() => {
       setReconnectAttempts(prev => prev + 1);
@@ -485,14 +482,12 @@ export const useWebSocket = ({
       
       if (nextAppState === 'active') {
         // App came to foreground - reconnect if needed
-        console.log('📱 App became active - checking WebSocket connection');
         if (!isConnected && shouldReconnectRef.current) {
           setReconnectAttempts(0);
           connect();
         }
       } else if (nextAppState === 'background') {
         // App went to background - keep connection alive but stop aggressive reconnects
-        console.log('📱 App went to background');
       }
     });
     

@@ -49,8 +49,9 @@ GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=YOUR_GOOGLE_CLIENT_SECRET
 
 # Existing configs
-DEEPSEEK_API_KEY=your-key
-GROQ_API_KEY=your-key
+NVIDIA_API_KEY=your-key
+NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_CHAT_MODEL=deepseek-ai/deepseek-r1
 CLOUDINARY_CLOUD_NAME=your-name
 CLOUDINARY_API_KEY=your-key
 CLOUDINARY_API_SECRET=your-secret

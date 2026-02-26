@@ -5,7 +5,9 @@ Initialize Firebase Admin for backend token verification
 import firebase_admin
 from firebase_admin import credentials, auth
 import os
-from pathlib import Path
+import json
+
+from .config import settings
 
 # Flag to check if Firebase Admin is initialized
 _firebase_initialized = False
@@ -15,8 +17,7 @@ def initialize_firebase_admin():
     """
     Initialize Firebase Admin SDK
     
-    Uses serviceAccountKey.json from backend/app/core/ directory
-    or from path specified in FIREBASE_SERVICE_ACCOUNT_KEY env variable
+    Uses FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_KEY env variables.
     """
     global _firebase_initialized
     
@@ -33,27 +34,26 @@ def initialize_firebase_admin():
         # Not initialized, proceed with initialization
         pass
     
-    # Get service account key path
-    service_account_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY')
-    
-    if not service_account_path:
-        # Default path: backend/app/core/serviceAccountKey.json
-        current_dir = Path(__file__).parent
-        service_account_path = current_dir / 'serviceAccountKey.json'
-    
-    if not os.path.exists(service_account_path):
+    service_account_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON or os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    service_account_path = settings.FIREBASE_SERVICE_ACCOUNT_KEY or os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+
+    if service_account_json:
+        key_data = json.loads(service_account_json)
+        private_key = key_data.get("private_key")
+        if private_key and "\\n" in private_key:
+            key_data["private_key"] = private_key.replace("\\n", "\n")
+        cred = credentials.Certificate(key_data)
+    elif service_account_path and os.path.exists(service_account_path):
+        cred = credentials.Certificate(str(service_account_path))
+    else:
         raise FileNotFoundError(
-            f"Firebase service account key not found at: {service_account_path}\n"
-            "Download it from Firebase Console > Project Settings > Service Accounts\n"
-            "and place it at backend/app/core/serviceAccountKey.json"
+            "Firebase credentials missing. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_KEY."
         )
-    
+
     # Initialize Firebase Admin
-    cred = credentials.Certificate(str(service_account_path))
     firebase_admin.initialize_app(cred)
     _firebase_initialized = True
-    
-    print(f"Firebase Admin SDK initialized successfully from: {service_account_path}")
+    print("Firebase Admin SDK initialized successfully")
 
 
 def verify_firebase_token(id_token: str) -> dict:

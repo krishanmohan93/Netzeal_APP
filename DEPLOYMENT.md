@@ -1,5 +1,7 @@
 # Deployment Guide for NetZeal
 
+> For the current production rollout flow, use `PRODUCTION_DEPLOYMENT_CHECKLIST.md` first.
+
 ## Table of Contents
 1. [Backend Deployment](#backend-deployment)
 2. [Frontend Deployment](#frontend-deployment)
@@ -45,10 +47,12 @@
    ```
    DATABASE_URL=postgresql://...
    SECRET_KEY=your-secret-key
-   OPENAI_API_KEY=sk-...
-   PINECONE_API_KEY=...
-   PINECONE_ENVIRONMENT=...
-   PINECONE_INDEX_NAME=netzeal-vectors
+   NVIDIA_API_KEY=nvapi-...
+   NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+   NVIDIA_CHAT_MODEL=deepseek-ai/deepseek-r1
+   QDRANT_URL=https://your-qdrant-cluster.qdrant.io
+   QDRANT_API_KEY=...
+   QDRANT_COLLECTION_NAME=netzeal_posts
    DEBUG=False
    ```
 
@@ -79,8 +83,8 @@
 4. **Set Environment Variables**
    ```powershell
    railway variables set SECRET_KEY=your-secret-key
-   railway variables set OPENAI_API_KEY=sk-...
-   railway variables set PINECONE_API_KEY=...
+   railway variables set NVIDIA_API_KEY=nvapi-...
+   railway variables set QDRANT_API_KEY=...
    ```
 
 5. **Deploy**
@@ -290,13 +294,15 @@ SECRET_KEY=your-very-long-secret-key-min-32-chars
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-# OpenAI
-OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+# NVIDIA Integrate (OpenAI-compatible)
+NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxx
+NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_CHAT_MODEL=deepseek-ai/deepseek-r1
 
-# Pinecone
-PINECONE_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-PINECONE_ENVIRONMENT=us-east-1-aws
-PINECONE_INDEX_NAME=netzeal-vectors
+# Qdrant
+QDRANT_URL=https://your-qdrant-cluster.qdrant.io
+QDRANT_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+QDRANT_COLLECTION_NAME=netzeal_posts
 
 # Application
 API_V1_PREFIX=/api/v1

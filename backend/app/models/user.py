@@ -39,6 +39,11 @@ class User(Base):
     # Account Status
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
+    refresh_token_version = Column(Integer, nullable=False, server_default="0", default=0)
+    email_verification_token = Column(String(128), nullable=True)
+    email_verification_expires_at = Column(DateTime(timezone=True), nullable=True)
+    password_reset_token = Column(String(128), nullable=True)
+    password_reset_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

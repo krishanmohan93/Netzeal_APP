@@ -46,7 +46,6 @@ const SearchScreen = ({ navigation }) => {
     setLoading(true);
     try {
       let response;
-      console.log(`🔍 Searching ${tab} for:`, searchText);
 
       if (tab === 'people') {
         response = await api.get('/search/users', { params: { query: searchText } });

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import json
 
 from ..core.database import get_async_db
+from ..core.rate_limit import chat_message_rate_limit
 from ..models.user import User
 from ..models.chat import (
     Conversation, ConversationParticipant, Message, 
@@ -111,6 +112,9 @@ async def list_conversations(
     List user's conversations with last message preview
     Ordered by last activity
     """
+    limit = min(max(limit, 1), 50)
+    offset = max(offset, 0)
+
     result = await db.execute(
         select(Conversation)
         .join(ConversationParticipant)
@@ -261,6 +265,8 @@ async def get_messages(
     Get messages with cursor pagination
     Cursor format: "timestamp_messageid" (e.g., "2024-01-01T12:00:00_123")
     """
+    limit = min(max(limit, 1), 100)
+
     # Check participant
     participant = await db.execute(
         select(ConversationParticipant).where(
@@ -357,7 +363,8 @@ async def send_message(
     reply_to_id: Optional[int] = Form(None),
     media: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _: None = Depends(chat_message_rate_limit),
 ):
     """
     Send message (text or media)

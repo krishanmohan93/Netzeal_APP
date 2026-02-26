@@ -22,6 +22,7 @@ import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { API_CONFIG } from '../config/environment';
 import { configureGoogleSignIn, signInWithGoogle } from '../services/googleAuth';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
@@ -54,6 +55,7 @@ const LoginScreen = ({ navigation }) => {
   }, []);
 
   const handleEmailLogin = async () => {
+    if (loading || googleLoading) return;
     if (!email || !password) {
       Alert.alert('Validation', 'Please enter email and password');
       return;
@@ -64,7 +66,7 @@ const LoginScreen = ({ navigation }) => {
     setLoading(false);
 
     if (!result.success) {
-      Alert.alert('Login Error', result.error || 'Failed to login');
+      Alert.alert('Login Error', getUserFacingError({ message: result.error }, 'Failed to login'));
     }
   };
 
@@ -86,10 +88,10 @@ const LoginScreen = ({ navigation }) => {
 
       const result = await googleSignIn(signInResult.idToken);
       if (!result.success) {
-        Alert.alert('Google Sign-In Error', result.error || 'Failed to sign in with Google');
+        Alert.alert('Google Sign-In Error', getUserFacingError({ message: result.error }, 'Failed to sign in with Google'));
       }
     } catch (error) {
-      Alert.alert('Google Sign-In Error', error?.message || 'Google sign-in failed');
+      Alert.alert('Google Sign-In Error', getUserFacingError(error, 'Google sign-in failed'));
     } finally {
       setGoogleLoading(false);
     }
@@ -97,7 +99,7 @@ const LoginScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (error) {
-      Alert.alert('Error', error);
+      Alert.alert('Error', getUserFacingError({ message: error }, 'Something went wrong.'));
       clearError();
     }
   }, [error, clearError]);
@@ -218,7 +220,7 @@ const LoginScreen = ({ navigation }) => {
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
             onPress={handleEmailLogin}
-            disabled={loading}
+            disabled={loading || googleLoading || !email.trim() || !password.trim()}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />

@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { API_BASE_URL, API_CONFIG } from '../config/environment';
 import { Alert } from 'react-native';
+import { getUserFacingError } from '../utils/errorMessages';
 
 // In-memory auth token cache
 let authToken = null;
@@ -151,8 +152,6 @@ const retryRequest = async (originalRequest, retryCount = 0) => {
     throw originalRequest;
   }
 
-  console.log(`🔄 Retrying request (${retryCount + 1}/${API_CONFIG.RETRY_ATTEMPTS}):`, originalRequest.config?.url);
-
   // Wait before retry
   await new Promise(resolve => setTimeout(resolve, API_CONFIG.RETRY_DELAY));
 
@@ -166,10 +165,7 @@ const retryRequest = async (originalRequest, retryCount = 0) => {
 // Development logging (set to false for production-ready app)
 const SHOW_API_LOGS = false; // Set to true for debugging
 if (__DEV__ && SHOW_API_LOGS) {
-  console.log('🔧 Axios Configuration:');
-  console.log('  🌐 Base URL:', API_CONFIG.BASE_URL);
-  console.log('  ⏱️ Timeout:', API_CONFIG.TIMEOUT + 'ms');
-  console.log('  🔄 Retry Logic: Enabled');
+  // Intentionally muted for cleaner development output
 }
 
 // Request interceptor to add auth token
@@ -200,24 +196,9 @@ api.interceptors.response.use(
     const is401 = error.response?.status === 401;
     const is404 = error.response?.status === 404;
 
-    if (__DEV__) {
-      // Comprehensive error logging for development
-      console.error('🚨 API Error Analysis:');
-      console.error('  📧 Error Message:', error.message);
-      console.error('  🌐 Request URL:', error.config?.baseURL + error.config?.url);
-      console.error('  📝 Method:', error.config?.method?.toUpperCase());
-
-      if (error.response) {
-        console.error('  📊 Response Status:', error.response.status);
-        console.error('  📋 Response Data:', JSON.stringify(error.response.data));
-        if (is404) {
-          console.error('  ⚠️ ENDPOINT NOT FOUND - Check if this endpoint exists in backend');
-        }
-      } else if (error.request) {
-        console.error('  🔍 Error Type: Network Error');
-      } else {
-        console.error('  🔍 Error Type: Request Setup Error');
-      }
+    if (__DEV__ && false) {
+      // Enable temporary diagnostics by changing condition above.
+      void is404;
     }
 
     // Try retry for network errors
@@ -226,7 +207,7 @@ api.interceptors.response.use(
       try {
         return await retryRequest(error);
       } catch (retryError) {
-        console.error('🔴 Retry failed, giving up');
+        error.userMessage = getUserFacingError(retryError, 'Request failed. Please try again.');
       }
     }
 
@@ -289,7 +270,7 @@ api.interceptors.response.use(
             await SecureStore.deleteItemAsync('firebaseToken').catch(() => { });
             await SecureStore.deleteItemAsync('userId').catch(() => { });
           } catch (e) {
-            console.log('SecureStore cleanup skipped');
+            // SecureStore cleanup best-effort
           }
 
           // Show session expired message ONLY ONCE
@@ -330,15 +311,11 @@ api.interceptors.response.use(
     }
 
     // Handle other errors
-    if (error.response?.status === 500) {
-      console.error('Server error:', error.response.data);
-    } else if (error.response?.status === 404) {
-      // Only log 404 if it's not notifications (expected to not exist yet)
-      if (!error.config?.url?.includes('/notifications')) {
-        console.error('Resource not found:', error.config.url);
-      }
-    } else if (error.code === 'ECONNABORTED' || error.message === 'Network Error') {
-      console.error('Network error - check your connection');
+    if (error.response?.status === 503) {
+      const backendMessage = error.response?.data?.detail || error.response?.data?.error?.message;
+      error.userMessage = backendMessage || 'This feature is temporarily unavailable. Please try again later.';
+    } else {
+      error.userMessage = getUserFacingError(error, 'Something went wrong. Please try again.');
     }
 
     return Promise.reject(error);
@@ -508,23 +485,11 @@ export const contentAPI = {
         throw new Error('Post ID is required');
       }
       const url = `/content/posts/${postId}`;
-      console.log('🗑️ Deleting post:', postId);
-      console.log('📍 API Base URL:', API_BASE_URL);
-      console.log('🔗 Full URL:', `${API_BASE_URL}${url}`);
 
       const response = await api.delete(url);
-      console.log('✅ Delete successful:', response.data);
       return response.data;
     } catch (error) {
-      console.error('❌ Delete Post Error:', {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        url: error.config?.url,
-        method: error.config?.method,
-        baseURL: error.config?.baseURL
-      });
+      error.userMessage = getUserFacingError(error, 'Could not delete post. Please try again.');
       throw error;
     }
   },
@@ -538,7 +503,7 @@ export const contentAPI = {
       setFeedItems(prev => [enriched, ...prev]);
       return publishResp;
     } catch (e) {
-      console.error('Publish failed:', e);
+      e.userMessage = getUserFacingError(e, 'Could not publish post. Please try again.');
       throw e;
     }
   },

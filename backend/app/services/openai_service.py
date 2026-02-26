@@ -6,8 +6,11 @@ import logging
 from typing import List, Dict, Optional
 from ..core.config import settings
 
-# Initialize OpenAI client
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+# Initialize OpenAI-compatible client (NVIDIA Integrate)
+client = OpenAI(
+    api_key=settings.NVIDIA_API_KEY,
+    base_url=settings.NVIDIA_API_BASE_URL,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +51,7 @@ class OpenAIService:
         try:
             # Generate response (updated model name)
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=settings.NVIDIA_CHAT_MODEL,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=800
@@ -187,7 +190,7 @@ Use this profile context to personalize your responses and recommendations.
             Summary text
         """
         response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.NVIDIA_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": "Summarize the following professional content in 2-3 sentences."},
                 {"role": "user", "content": content}
@@ -209,7 +212,7 @@ Use this profile context to personalize your responses and recommendations.
             List of topics
         """
         response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.NVIDIA_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": "Extract 3-5 main topics from this content. Return only comma-separated topics."},
                 {"role": "user", "content": content}
@@ -252,7 +255,7 @@ Course Name | Platform | Reason
 Only provide actual course names."""
         
         response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.NVIDIA_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": "You are a career development advisor recommending relevant courses."},
                 {"role": "user", "content": prompt}

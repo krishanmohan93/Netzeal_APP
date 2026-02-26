@@ -4,6 +4,7 @@
 import axios from 'axios';
 import { API_BASE_URL } from '../config/environment';
 import { getAuthToken, getRefreshToken, setAuthToken, clearAuthTokens } from './api';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -44,9 +45,12 @@ apiClient.interceptors.response.use(
       } catch (refreshError) {
         // Refresh failed - redirect to login
         await clearAuthTokens();
+        refreshError.userMessage = getUserFacingError(refreshError, 'Your session expired. Please sign in again.');
         return Promise.reject(refreshError);
       }
     }
+
+    error.userMessage = getUserFacingError(error, 'Unable to complete chat request. Please try again.');
     
     return Promise.reject(error);
   }

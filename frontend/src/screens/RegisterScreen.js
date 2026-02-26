@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import { getUserFacingError } from '../utils/errorMessages';
 
 const RegisterScreen = ({ navigation }) => {
   const [fullName, setFullName] = useState('');
@@ -58,6 +59,7 @@ const RegisterScreen = ({ navigation }) => {
   };
 
   const handleRegister = async () => {
+    if (loading) return;
     // Validation
     if (!fullName.trim()) {
       Alert.alert('Validation', 'Please enter your full name');
@@ -89,15 +91,15 @@ const RegisterScreen = ({ navigation }) => {
     setLoading(false);
 
     if (!result.success) {
-      Alert.alert('Registration Error', result.error || 'Failed to register');
+      Alert.alert('Registration Error', getUserFacingError({ message: result.error }, 'Failed to register'));
     } else {
-      Alert.alert('Success', 'Account created successfully!');
+      Alert.alert('Success', 'Account created. Please verify your email before signing in.');
     }
   };
 
   useEffect(() => {
     if (error) {
-      Alert.alert('Error', error);
+      Alert.alert('Error', getUserFacingError({ message: error }, 'Something went wrong.'));
       clearError();
     }
   }, [error, clearError]);
@@ -270,7 +272,14 @@ const RegisterScreen = ({ navigation }) => {
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
             onPress={handleRegister}
-            disabled={loading}
+            disabled={
+              loading ||
+              !fullName.trim() ||
+              !email.trim() ||
+              !username.trim() ||
+              !password ||
+              !confirmPassword
+            }
           >
             {loading ? (
               <ActivityIndicator color="#fff" />

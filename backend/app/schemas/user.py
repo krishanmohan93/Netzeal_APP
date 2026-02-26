@@ -89,3 +89,20 @@ class GoogleAuthResponse(BaseModel):
     expires_in: int
     user: UserResponse
     is_new_user: bool
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8, description="Password must be at least 8 characters")

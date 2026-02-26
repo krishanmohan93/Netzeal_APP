@@ -4,10 +4,14 @@ Social networking routes (follow, networking)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 from typing import List
 
 from ..core.database import get_db
 from ..core.security import get_current_user
+from ..core.rate_limit import engagement_rate_limit
+from ..core.feature_gates import require_semantic_features_enabled
+from ..utils.redis_cache import invalidate_profile_cache
 from ..models import User, Follow, Post
 from ..schemas.user import UserResponse
 from ..services.embedding_service import EmbeddingService
@@ -16,9 +20,30 @@ from ..services.qdrant_service import QdrantService
 router = APIRouter(prefix="/social", tags=["Social Networking"])
 
 # Lazy initialization of services for AI-powered matching
-embedding_service = EmbeddingService()
+_embedding_service = None
+_embedding_init_attempted = False
 _qdrant_service = None
 _qdrant_init_attempted = False
+
+
+def get_embedding_service():
+    """Lazy initialization of embedding service with error handling."""
+    global _embedding_service, _embedding_init_attempted
+
+    if _embedding_service is not None:
+        return _embedding_service
+
+    if _embedding_init_attempted:
+        return None
+
+    _embedding_init_attempted = True
+
+    try:
+        _embedding_service = EmbeddingService()
+        return _embedding_service
+    except Exception as e:
+        print(f"⚠️ Embedding initialization failed in social router: {e}")
+        return None
 
 def get_qdrant_service():
     """Lazy initialization of Qdrant service with error handling."""
@@ -34,6 +59,7 @@ def get_qdrant_service():
     
     try:
         _qdrant_service = QdrantService()
+        _qdrant_service.init_posts_collection()
         return _qdrant_service
     except Exception as e:
         print(f"⚠️ Qdrant initialization failed in social router: {e}")
@@ -44,7 +70,8 @@ def get_qdrant_service():
 async def follow_user(
     user_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     """Follow a user"""
     
@@ -70,10 +97,7 @@ async def follow_user(
     ).first()
     
     if existing_follow:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Already following this user"
-        )
+        return {"message": f"Successfully followed {user_to_follow.username}"}
     
     # Create follow relationship
     new_follow = Follow(
@@ -82,7 +106,12 @@ async def follow_user(
     )
     
     db.add(new_follow)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+
+    await invalidate_profile_cache([current_user.id, user_id])
     
     return {"message": f"Successfully followed {user_to_follow.username}"}
 
@@ -91,7 +120,8 @@ async def follow_user(
 async def unfollow_user(
     user_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     """Unfollow a user"""
     
@@ -101,13 +131,12 @@ async def unfollow_user(
     ).first()
     
     if not follow:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Not following this user"
-        )
+        return {"message": "Successfully unfollowed user"}
     
     db.delete(follow)
     db.commit()
+
+    await invalidate_profile_cache([current_user.id, user_id])
     
     return {"message": "Successfully unfollowed user"}
 
@@ -226,7 +255,8 @@ async def check_if_following(
 async def ai_powered_user_matching(
     limit: int = Query(10, ge=1, le=50, description="Max users to return"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_semantic_features_enabled),
 ):
     """
     AI-powered user matching and recommendations
@@ -237,6 +267,10 @@ async def ai_powered_user_matching(
     - Excludes users you already follow
     """
     try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise HTTPException(status_code=503, detail="AI user matching is temporarily unavailable")
+
         # Build user profile text from interests, skills, and recent posts
         profile_parts = []
         
@@ -289,28 +323,7 @@ async def ai_powered_user_matching(
         # Search for posts by other users with similar content
         qdrant = get_qdrant_service()
         if not qdrant:
-            # Qdrant not available, return popular users instead
-            popular_users = db.query(User).filter(
-                User.id != current_user.id
-            ).order_by(desc(User.id)).limit(limit).all()
-            
-            return {
-                "message": "AI matching temporarily unavailable. Showing popular users.",
-                "users": [
-                    {
-                        "id": u.id,
-                        "username": u.username,
-                        "full_name": u.full_name,
-                        "profile_photo": u.profile_photo,
-                        "bio": u.bio,
-                        "interests": u.interests or [],
-                        "skills": u.skills or [],
-                        "match_score": 0.0
-                    }
-                    for u in popular_users
-                ],
-                "count": len(popular_users)
-            }
+            raise HTTPException(status_code=503, detail="AI user matching is temporarily unavailable")
         
         search_results = qdrant.search_posts(user_embedding, limit=limit * 5)
         

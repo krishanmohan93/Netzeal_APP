@@ -9,7 +9,14 @@ from sqlalchemy.orm import sessionmaker
 from .config import settings
 
 # Create synchronous database engine (for Alembic and sync operations)
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+    pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+)
 
 # Create async database engine (for async operations)
 # Convert postgresql:// to postgresql+asyncpg://
@@ -37,6 +44,10 @@ async_engine = create_async_engine(
     async_database_url, 
     pool_pre_ping=True, 
     echo=False,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+    pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
     connect_args={"ssl": ssl_context} if ssl_context else {}
 )
 

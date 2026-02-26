@@ -1,12 +1,11 @@
 services:
   - type: web
     name: netzeal-backend
-    env: python
-    plan: free
+    env: docker
+    plan: starter
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/v1/ping
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
@@ -47,3 +46,55 @@ services:
         value: NetZeal
       - key: DEBUG
         value: "False"
+      - key: RUN_MIGRATIONS
+        value: "true"
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_REQUEST_SIZE_BYTES
+        value: "10485760"
+      - key: FORCE_HTTPS
+        value: "True"
+      - key: SECURE_RESPONSE_HEADERS
+        value: "True"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "True"
+
+  - type: cron
+    name: netzeal-db-backup
+    env: docker
+    plan: starter
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    schedule: "0 2 * * *"
+    startCommand: sh scripts/backup_db.sh
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BACKUP_DIR
+        value: /tmp/netzeal_backups
+      - key: BACKUP_RETENTION_DAYS
+        value: "7"
+      - key: BACKUP_S3_BUCKET
+        sync: false

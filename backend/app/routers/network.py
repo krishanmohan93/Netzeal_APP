@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from typing import List
 
 from ..core.database import get_db, get_async_db
+from ..core.rate_limit import chat_message_rate_limit, engagement_rate_limit
 from ..models.user import User
 from ..models.connection import Connection, ConversationV2, MessageV2
 from ..models.content import Post, ContentType
@@ -349,7 +350,8 @@ async def _get_or_create_conversation(db: AsyncSession, user_a: UUID, user_b: UU
 async def connect_toggle(
     payload: ConnectToggleRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _: None = Depends(engagement_rate_limit),
 ):
     me_public_id = await _ensure_public_id(current_user, db)
     target_public_id = payload.target_public_id
@@ -453,7 +455,8 @@ async def create_chat(
 async def send_message(
     payload: ChatSendRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_async_db),
+    _: None = Depends(chat_message_rate_limit),
 ):
     me_public_id = await _ensure_public_id(current_user, db)
 

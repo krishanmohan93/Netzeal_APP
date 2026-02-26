@@ -19,7 +19,7 @@ NetZeal is an AI-powered social platform that blends professional networking, pe
 
 ### Technical Highlights
 - **Vector Search**: Pinecone integration for similarity-based recommendations
-- **OpenAI Integration**: GPT-4 for conversational AI and embeddings for content analysis
+- **NVIDIA Integrate**: OpenAI-compatible chat completions for conversational AI workflows
 - **Real-time Feed**: Personalized content feed based on user interests
 - **Engagement Tracking**: Comprehensive analytics for user behavior
 - **Secure Authentication**: JWT-based authentication system
@@ -55,8 +55,8 @@ NetZeal/
 **Backend:**
 - Python 3.9+
 - PostgreSQL database
-- OpenAI API key
-- Pinecone API key
+- NVIDIA Integrate API key
+- Qdrant API key
 
 **Frontend:**
 - Node.js 16+
@@ -90,9 +90,11 @@ Edit `.env` file with your credentials:
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/netzeal
 SECRET_KEY=your-secret-key-here
-OPENAI_API_KEY=your-openai-api-key
-PINECONE_API_KEY=your-pinecone-api-key
-PINECONE_ENVIRONMENT=your-pinecone-environment
+NVIDIA_API_KEY=your-nvidia-api-key
+NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_CHAT_MODEL=deepseek-ai/deepseek-r1
+QDRANT_URL=https://your-cluster-id.qdrant.io
+QDRANT_API_KEY=your-qdrant-api-key
 ```
 
 5. **Run the application:**
@@ -171,8 +173,8 @@ npm start
 - **FastAPI** - Modern Python web framework
 - **SQLAlchemy** - ORM for database operations
 - **PostgreSQL** - Primary database
-- **OpenAI API** - GPT-4 for AI conversations & embeddings
-- **Pinecone** - Vector database for similarity search
+- **NVIDIA Integrate** - OpenAI-compatible AI provider for chat completions
+- **Qdrant** - Vector database for similarity search
 - **JWT** - Secure authentication
 - **Pydantic** - Data validation
 
@@ -211,9 +213,11 @@ Add these to your `.env`:
 ```env
 DATABASE_URL=postgresql://user:pass@host:5432/netzeal
 SECRET_KEY=super-secret-string
-OPENAI_API_KEY=your-openai-key
-PINECONE_API_KEY=your-pinecone-key
-PINECONE_ENVIRONMENT=your-pinecone-env
+NVIDIA_API_KEY=your-nvidia-key
+NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_CHAT_MODEL=deepseek-ai/deepseek-r1
+QDRANT_URL=https://your-qdrant-cluster.qdrant.io
+QDRANT_API_KEY=your-qdrant-key
 REDIS_URL=redis://localhost:6379/0            # optional (for feed cache invalidation)
 STORAGE_BASE_URL=https://res.cloudinary.com/<cloud_name>/   # used for media delivery
 ```
@@ -334,8 +338,8 @@ This project is licensed under the MIT License.
 
 ## 🙏 Acknowledgments
 
-- OpenAI for GPT-4 and embeddings API
-- Pinecone for vector database
+- NVIDIA for Integrate API
+- Qdrant for vector database
 - FastAPI community
 - React Native community
 - Expo team

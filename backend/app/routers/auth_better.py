@@ -190,7 +190,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 @router.post("/login")
@@ -257,7 +257,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 @router.post("/google")
@@ -336,7 +336,7 @@ async def google_auth(request: Request, db: Session = Depends(get_db)):
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 @router.post("/forgot-password")
@@ -429,7 +429,7 @@ async def reset_password(request: Request):
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 # ============================================================================
@@ -568,7 +568,7 @@ async def refresh_session(request: Request, db: Session = Depends(get_db)):
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 @router.post("/verify-email")
@@ -615,7 +615,7 @@ async def verify_email(request: Request):
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid authentication request")
 
 
 @router.post("/resend-verification")

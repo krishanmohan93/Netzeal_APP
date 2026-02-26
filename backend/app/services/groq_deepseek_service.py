@@ -1,23 +1,23 @@
 """
-Dual AI Provider Service: Groq (Free) + DeepSeek Direct API (Premium)
-Production-ready async service with error handling and timeouts
+Unified AI Provider Service powered by NVIDIA Integrate (OpenAI-compatible API).
 """
-import httpx
 import logging
 from typing import Literal, Optional
+from openai import AsyncOpenAI
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Model configurations
-GROQ_MODEL = "llama-3.1-8b-instant"
-DEEPSEEK_MODEL = "deepseek-chat"  # Direct DeepSeek API model
-TIMEOUT = 5.0  # seconds
-
 
 class AIService:
-    """Unified AI service supporting both Groq (free) and DeepSeek (premium)"""
-    
+    """Unified AI service powered by NVIDIA Integrate."""
+
+    _client = AsyncOpenAI(
+        api_key=settings.NVIDIA_API_KEY,
+        base_url=settings.NVIDIA_API_BASE_URL,
+    )
+
+
     @staticmethod
     async def generate_ai_response(
         prompt: str,
@@ -26,132 +26,35 @@ class AIService:
         temperature: float = 0.7,
         max_tokens: int = 500
     ) -> str:
-        """
-        Generate AI response using either Groq (free) or DeepSeek (premium)
-        
-        Args:
-            prompt: User's input text
-            mode: "free" for Groq Llama-3.1-8B or "deep" for DeepSeek
-            system_prompt: Optional system context
-            temperature: Randomness (0.0-1.0)
-            max_tokens: Max response length
-            
-        Returns:
-            AI-generated text response
-            
-        Raises:
-            ValueError: Invalid mode or empty prompt
-            httpx.TimeoutException: Request timeout
-            httpx.HTTPStatusError: API error (rate limit, auth, etc.)
+        """Generate AI response via NVIDIA Integrate.
+
+        `mode` is retained for backward compatibility and can be used to choose
+        between model variants later, but currently both map to NVIDIA chat model.
         """
         if not prompt or not prompt.strip():
             raise ValueError("Prompt cannot be empty")
-        
-        if mode == "free":
-            return await AIService._call_groq(prompt, system_prompt, temperature, max_tokens)
-        elif mode == "deep":
-            return await AIService._call_deepseek(prompt, system_prompt, temperature, max_tokens)
-        else:
+
+        if mode not in {"free", "deep"}:
             raise ValueError(f"Invalid mode: {mode}. Use 'free' or 'deep'")
-    
-    @staticmethod
-    async def _call_groq(
-        prompt: str,
-        system_prompt: Optional[str],
-        temperature: float,
-        max_tokens: int
-    ) -> str:
-        """Call Groq API (free Llama-3.1-8B)"""
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
+
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
-        payload = {
-            "model": GROQ_MODEL,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens
-        }
-        
+
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-                
-        except httpx.TimeoutException:
-            logger.error("Groq API timeout")
-            raise ValueError("AI service timeout. Please try again.")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Groq API error: {e.response.status_code} - {e.response.text}")
-            if e.response.status_code == 429:
-                raise ValueError("Rate limit exceeded. Please wait a moment and try again.")
-            elif e.response.status_code == 401:
-                raise ValueError("AI service authentication failed.")
-            else:
-                raise ValueError(f"AI service error: {e.response.status_code}")
+            response = await AIService._client.chat.completions.create(
+                model=settings.NVIDIA_CHAT_MODEL,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=False,
+            )
+            content = response.choices[0].message.content
+            return (content or "").strip()
         except Exception as e:
-            logger.exception(f"Unexpected Groq error: {e}")
+            logger.exception("NVIDIA Integrate AI error: %s", e)
             raise ValueError("AI service temporarily unavailable.")
-    
-    @staticmethod
-    async def _call_deepseek(
-        prompt: str,
-        system_prompt: Optional[str],
-        temperature: float,
-        max_tokens: int
-    ) -> str:
-        """Call DeepSeek Direct API (premium)"""
-        url = "https://api.deepseek.com/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        payload = {
-            "model": DEEPSEEK_MODEL,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-                
-        except httpx.TimeoutException:
-            logger.error("DeepSeek API timeout")
-            raise ValueError("DeepSeek AI service timeout. Please try again.")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"DeepSeek API error: {e.response.status_code} - {e.response.text}")
-            if e.response.status_code == 429:
-                raise ValueError("DeepSeek rate limit exceeded. Please wait a moment.")
-            elif e.response.status_code == 402:
-                raise ValueError("Insufficient DeepSeek credits.")
-            elif e.response.status_code == 401:
-                raise ValueError("DeepSeek authentication failed. Check API key.")
-            else:
-                raise ValueError(f"DeepSeek AI error: {e.response.status_code}")
-        except Exception as e:
-            logger.exception(f"Unexpected DeepSeek error: {e}")
-            raise ValueError("DeepSeek AI service temporarily unavailable.")
     
     @staticmethod
     async def generate_caption(text: str, premium: bool = False) -> str:
@@ -160,7 +63,7 @@ class AIService:
         
         Args:
             text: Post content or topic
-            premium: Use DeepSeek if True, else Groq
+            premium: Backward-compatible flag; routed to NVIDIA model
             
         Returns:
             Generated caption with hashtags
@@ -185,7 +88,7 @@ class AIService:
     @staticmethod
     async def extract_hashtags(caption: str) -> list[str]:
         """
-        Extract or suggest hashtags from caption (using free Groq)
+        Extract or suggest hashtags from caption
         
         Args:
             caption: Social media caption text
