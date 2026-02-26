@@ -1,9 +1,9 @@
 """
 Unified AI Provider Service powered by NVIDIA Integrate (OpenAI-compatible API).
 """
+import httpx
 import logging
 from typing import Literal, Optional
-from openai import AsyncOpenAI
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -11,11 +11,6 @@ logger = logging.getLogger(__name__)
 
 class AIService:
     """Unified AI service powered by NVIDIA Integrate."""
-
-    _client = AsyncOpenAI(
-        api_key=settings.NVIDIA_API_KEY,
-        base_url=settings.NVIDIA_API_BASE_URL,
-    )
 
 
     @staticmethod
@@ -43,15 +38,36 @@ class AIService:
         messages.append({"role": "user", "content": prompt})
 
         try:
-            response = await AIService._client.chat.completions.create(
-                model=settings.NVIDIA_CHAT_MODEL,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=False,
-            )
-            content = response.choices[0].message.content
+            url = f"{settings.NVIDIA_API_BASE_URL.rstrip('/')}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": settings.NVIDIA_CHAT_MODEL,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False,
+            }
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
             return (content or "").strip()
+        except httpx.HTTPStatusError as e:
+            logger.error("NVIDIA Integrate HTTP error: %s - %s", e.response.status_code, e.response.text)
+            if e.response.status_code == 401:
+                raise ValueError("AI authentication failed. Check NVIDIA API key.")
+            if e.response.status_code == 429:
+                raise ValueError("AI rate limit exceeded. Please try again shortly.")
+            raise ValueError("AI service temporarily unavailable.")
+        except httpx.TimeoutException:
+            logger.error("NVIDIA Integrate timeout")
+            raise ValueError("AI service timeout. Please try again.")
         except Exception as e:
             logger.exception("NVIDIA Integrate AI error: %s", e)
             raise ValueError("AI service temporarily unavailable.")
