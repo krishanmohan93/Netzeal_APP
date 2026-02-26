@@ -9,6 +9,7 @@ import Constants from 'expo-constants';
 const LOCAL_IP = process.env.EXPO_PUBLIC_LOCAL_IP || '10.181.184.75';
 const API_PORT = '8000';
 const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || null;
+const PRODUCTION_API_BASE_URL = process.env.EXPO_PUBLIC_PRODUCTION_API_BASE_URL || 'https://netzeal-app-1.onrender.com/api/v1';
 const TIMEOUT = 30000; // 30 seconds
 const GOOGLE_EXPO_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID || null;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || null;
@@ -34,6 +35,10 @@ const getApiUrl = () => {
     return EXPLICIT_API_BASE_URL;
   }
 
+  if (!__DEV__) {
+    return PRODUCTION_API_BASE_URL;
+  }
+
   // Web development - use localhost
   if (Platform.OS === 'web') {
     return `http://localhost:${API_PORT}/api/v1`;
@@ -48,6 +53,10 @@ const getApiUrl = () => {
 const getFallbackUrls = () => {
   if (EXPLICIT_API_BASE_URL) {
     return [EXPLICIT_API_BASE_URL];
+  }
+
+  if (!__DEV__) {
+    return [PRODUCTION_API_BASE_URL];
   }
 
   if (Platform.OS === 'web') {

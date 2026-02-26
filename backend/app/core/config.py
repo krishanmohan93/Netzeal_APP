@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     HSTS_MAX_AGE: int = 31536000
     FIREBASE_SERVICE_ACCOUNT_KEY: Optional[str] = None
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
-    FRONTEND_BASE_URL: Optional[str] = None
+    FRONTEND_BASE_URL: Optional[str] = "netzeal://auth"
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
     SMTP_USERNAME: Optional[str] = None
@@ -95,7 +95,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         if not self.CORS_ORIGINS:
-            return []
+            return [
+                "netzeal://",
+                "exp://",
+                "https://auth.expo.io",
+            ]
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     @property

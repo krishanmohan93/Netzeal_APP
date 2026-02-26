@@ -79,6 +79,7 @@ class TokenData(BaseModel):
 class GoogleAuthRequest(BaseModel):
     """Schema for Google OAuth token"""
     id_token: str
+    redirect_uri: Optional[str] = None
 
 
 class GoogleAuthResponse(BaseModel):

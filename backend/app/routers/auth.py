@@ -3,6 +3,7 @@ Authentication routes - Email + Password + Google OAuth
 Production-ready authentication with Neon DB
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import timedelta, datetime
@@ -76,7 +77,17 @@ def _generate_raw_token() -> str:
 
 
 def _frontend_base_url() -> str:
-    return (settings.FRONTEND_BASE_URL or "https://app.netzeal.com").rstrip("/")
+    return (settings.FRONTEND_BASE_URL or "netzeal://auth").rstrip("/")
+
+
+def _is_allowed_mobile_redirect(uri: str) -> bool:
+    """Allow only trusted mobile deep-link callback targets.
+
+    We keep this narrow to avoid open redirect issues in OAuth callback flow.
+    """
+    if not uri:
+        return False
+    return uri.startswith("netzeal://") or uri.startswith("exp://")
 
 
 def _set_email_verification_token(user: User) -> str:
@@ -533,6 +544,35 @@ async def google_auth(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication failed"
         )
+
+
+@router.post("/google/mobile-callback")
+async def google_auth_mobile_callback(
+    token_request: GoogleAuthRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(strict_auth_rate_limit),
+):
+    """Authenticate Google token and redirect back to app deep-link.
+
+    This endpoint is for mobile OAuth callback flows where client expects a
+    redirect URI such as `netzeal://auth?...` after backend verification.
+    """
+    auth_result = await google_auth(token_request, db, _)
+
+    callback_base = token_request.redirect_uri or _frontend_base_url()
+    if not _is_allowed_mobile_redirect(callback_base):
+        callback_base = _frontend_base_url()
+
+    separator = "&" if "?" in callback_base else "?"
+    redirect_url = (
+        f"{callback_base}{separator}"
+        f"access_token={auth_result['access_token']}"
+        f"&refresh_token={auth_result['refresh_token']}"
+        f"&token_type={auth_result['token_type']}"
+        f"&expires_in={auth_result['expires_in']}"
+    )
+
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/send-verification-email")

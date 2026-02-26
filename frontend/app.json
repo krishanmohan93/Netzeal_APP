@@ -7,7 +7,6 @@
     "owner": "krishanmohan",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "icon": "./Logo_NetZeal.png",
     "splash": {
       "image": "./Logo_NetZeal.png",
       "resizeMode": "contain",
@@ -17,7 +16,9 @@
       "**/*"
     ],
     "plugins": [
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "expo-font",
+      "expo-secure-store"
     ],
     "extra": {
       "expoClient": {
@@ -31,19 +32,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.netzeal.app",
-      "config": {
-        "googleSignIn": {
-          "reservedClientId": "com.googleusercontent.apps.969312048318-4ka0pqht3npf3j6ohqrevfj6jvvno9js"
-        }
-      }
+      "bundleIdentifier": "com.netzeal.app"
     },
     "android": {
       "backgroundColor": "#FFFFFF",
-      "adaptiveIcon": {
-        "foregroundImage": "./Logo_NetZeal.png",
-        "backgroundColor": "#FFFFFF"
-      },
       "package": "com.netzeal.app",
       "softwareKeyboardLayoutMode": "pan"
     },

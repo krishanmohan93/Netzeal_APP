@@ -58,6 +58,16 @@ _qdrant_service = None
 _qdrant_init_attempted = False
 
 
+def _enqueue_fanout(post_id: int, author_id: int) -> None:
+    try:
+        if settings.CELERY_BROKER_URL:
+            fanout_post_to_followers.delay(post_id, author_id)
+        else:
+            fanout_post_to_followers.run(post_id, author_id)
+    except Exception as e:
+        logger.warning("Failed to run fanout task for post %s: %s", post_id, e)
+
+
 def get_embedding_service():
     """Lazy initialization of embedding service with error handling."""
     global _embedding_service, _embedding_init_attempted
@@ -159,10 +169,7 @@ async def create_post(
     except Exception as e:
         print(f"Error generating AI metadata: {e}")
 
-    try:
-        fanout_post_to_followers.delay(new_post.id, current_user.id)
-    except Exception as e:
-        logger.warning("Failed to enqueue fanout task for post %s: %s", new_post.id, e)
+    _enqueue_fanout(new_post.id, current_user.id)
 
     try:
         await manager.broadcast_json({"type": "NEW_POST", "post_id": new_post.id})
@@ -907,7 +914,7 @@ async def upload_instagram_post(
 
     # Fan-out in background worker for faster API response
     try:
-        fanout_post_to_followers.delay(new_post.id, current_user.id)
+        _enqueue_fanout(new_post.id, current_user.id)
     except Exception as e:
         logger.warning("Failed to enqueue fanout task for post %s: %s", new_post.id, e)
 
@@ -1076,7 +1083,7 @@ async def upload_multiple_media_posts(
 
         # Fan-out in background per post
         try:
-            fanout_post_to_followers.delay(post.id, current_user.id)
+            _enqueue_fanout(post.id, current_user.id)
         except Exception as e:
             logger.warning("Failed to enqueue fanout task for post %s: %s", post.id, e)
 
@@ -1413,7 +1420,7 @@ async def publish_post(
 
     # Fan-out in background worker
     try:
-        fanout_post_to_followers.delay(post.id, current_user.id)
+        _enqueue_fanout(post.id, current_user.id)
     except Exception as e:
         logger.warning("Failed to enqueue fanout task for published post %s: %s", post.id, e)
 
@@ -2143,7 +2150,7 @@ async def upload_multi_media_single_post(
         pass
 
     try:
-        fanout_post_to_followers.delay(new_post.id, current_user.id)
+        _enqueue_fanout(new_post.id, current_user.id)
     except Exception as e:
         logger.warning("Failed to enqueue fanout task for multi-media post %s: %s", new_post.id, e)
 

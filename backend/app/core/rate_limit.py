@@ -26,10 +26,27 @@ _REDIS_INIT_ATTEMPTED = False
 def _get_identifier(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+        client_ip = forwarded_for.split(",")[0].strip()
+    elif request.client and request.client.host:
+        client_ip = request.client.host
+    else:
+        client_ip = "unknown"
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        if token:
+            try:
+                from .security import decode_access_token
+
+                payload = decode_access_token(token)
+                subject = payload.get("sub") if payload else None
+                if subject:
+                    return f"{client_ip}:user:{subject}"
+            except Exception:
+                pass
+
+    return client_ip
 
 
 def _enforce_limit(key: str, limit: int, window_seconds: int) -> int | None:

@@ -6,6 +6,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import { Linking } from 'react-native';
 import { API_CONFIG } from '../config/environment';
 import { setAuthToken, clearAuthTokens } from '../services/api';
 import { getUserFacingError } from '../utils/errorMessages';
@@ -66,6 +67,59 @@ export const AuthProvider = ({ children }) => {
   // Initialize auth on app start
   useEffect(() => {
     bootstrapAsync();
+  }, []);
+
+  useEffect(() => {
+    const processUrl = async (url) => {
+      if (!url) {
+        return;
+      }
+
+      try {
+        const query = url.split('?')[1] || '';
+        const params = new URLSearchParams(query);
+        const accessToken = params.get('access_token');
+        const refreshToken = params.get('refresh_token');
+
+        if (!accessToken) {
+          return;
+        }
+
+        await setAuthToken(accessToken, refreshToken || undefined);
+        const profileResponse = await fetchAuthWithFallback('/auth/me', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        const { data, text } = await readResponseBody(profileResponse);
+        if (!profileResponse.ok || !data) {
+          throw new Error(data?.detail || data?.message || text || 'Failed to complete sign-in');
+        }
+
+        const userData = data.user || data;
+        await AsyncStorage.setItem('user_data', JSON.stringify(userData));
+        setTokens({ access: accessToken, refresh: refreshToken || null });
+        setUser(userData);
+        setError(null);
+      } catch (err) {
+        await clearSession();
+        setError(getUserFacingError(err, 'Could not complete sign-in. Please try again.'));
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      processUrl(url);
+    });
+
+    Linking.getInitialURL().then((url) => {
+      processUrl(url);
+    });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   const bootstrapAsync = async () => {
