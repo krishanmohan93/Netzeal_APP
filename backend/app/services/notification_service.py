@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from ..models.notification import Notification
 from ..utils.ws import manager
+from ..models.user import User
 
 async def create_notification(
     db: Session, 
@@ -27,6 +29,8 @@ async def create_notification(
         db.add(new_notif)
         db.commit()
         db.refresh(new_notif)
+
+        sender = db.query(User).filter(User.id == sender_id).first()
         
         # Prepare WS payload
         payload = {
@@ -36,20 +40,20 @@ async def create_notification(
                 "type": type,
                 "text": text,
                 "sender": {
-                    "username": new_notif.sender.username,
-                    "profile_photo": new_notif.sender.profile_photo,
-                    "public_id": str(new_notif.sender.public_id) if new_notif.sender.public_id else None
+                    "username": sender.username if sender else "Unknown",
+                    "profile_photo": sender.profile_photo if sender else None,
+                    "public_id": str(sender.public_id) if sender and sender.public_id else None
                 },
                 "entity_id": entity_id,
                 "created_at": new_notif.created_at.isoformat()
             }
         }
+        await manager.send_personal_message(payload, recipient_id)
     except Exception as e:
+        db.rollback()
         print(f"Error creating notification: {e}")
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from ..models.user import User
 
 async def create_notification_async(
     db: AsyncSession, 

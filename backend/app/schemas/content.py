@@ -180,7 +180,7 @@ class CommentBase(BaseModel):
 
 class CommentCreate(CommentBase):
     """Schema for creating a comment"""
-    post_id: int
+    post_id: Optional[int] = None
 
 
 class CommentResponse(CommentBase):

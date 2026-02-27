@@ -3,6 +3,7 @@ Content management routes (posts, comments, likes, bookmarks)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 import logging
+import mimetypes
 from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 from sqlalchemy import desc, or_, func
 from sqlalchemy.exc import IntegrityError
@@ -41,7 +42,7 @@ from ..schemas.content import (
 )
 from ..utils.ws import manager
 from ..services.notification_service import create_notification
-from ..utils.redis_cache import get_cached_json, set_cached_json, paged_feed_cache_key, get_cache, set_cache
+from ..utils.redis_cache import get_cached_json, set_cached_json, paged_feed_cache_key, get_cache, set_cache, invalidate_all_feeds
 from ..models.content import FeedItem
 from ..services.groq_deepseek_service import AIService
 from ..services.embedding_service import EmbeddingService
@@ -123,6 +124,25 @@ def _get_allowed_author_ids(db: Session, current_user: User) -> List[int]:
     if not public_ids:
         return []
     return [row[0] for row in db.query(User.id).filter(User.public_id.in_(public_ids)).all()]
+
+
+def _resolve_upload_mime(upload: UploadFile) -> str:
+    content_type = (upload.content_type or "").lower().strip()
+    if content_type:
+        return content_type
+    guessed_type, _ = mimetypes.guess_type(upload.filename or "")
+    return (guessed_type or "").lower().strip()
+
+
+def _validate_media_size(file_bytes: bytes, *, is_video: bool = False) -> None:
+    size_bytes = len(file_bytes)
+    max_bytes = settings.MAX_VIDEO_UPLOAD_SIZE_BYTES if is_video else settings.MAX_MEDIA_UPLOAD_SIZE_BYTES
+    if size_bytes > max_bytes:
+        max_mb = round(max_bytes / (1024 * 1024))
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum allowed size is {max_mb}MB",
+        )
 
 
 @router.post("/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
@@ -233,7 +253,8 @@ async def get_user_posts_by_id(
                 Post.created_at,
                 Post.updated_at,
             ),
-            joinedload(Post.author).load_only(User.id, User.username, User.full_name, User.profile_photo)
+            joinedload(Post.author).load_only(User.id, User.username, User.full_name, User.profile_photo),
+            selectinload(Post.comments).load_only(Comment.id, Comment.post_id)
         )
         .filter(Post.author_id == user.id)
         .order_by(desc(Post.created_at))
@@ -542,6 +563,11 @@ async def like_post(
         raise
 
     db.refresh(new_like)
+
+    try:
+        await invalidate_all_feeds([current_user.id, post.author_id])
+    except Exception:
+        pass
     
     # NOTIFICATION
     await create_notification(
@@ -573,6 +599,9 @@ async def unlike_post(
     if not like:
         return {"message": "Post already unliked"}
     
+    post = db.query(Post).filter(Post.id == post_id).first()
+    post_author_id = post.author_id if post else None
+
     # Update post likes count atomically
     db.query(Post).filter(Post.id == post_id).update(
         {Post.likes_count: func.greatest(Post.likes_count - 1, 0)},
@@ -581,6 +610,11 @@ async def unlike_post(
     
     db.delete(like)
     db.commit()
+
+    try:
+        await invalidate_all_feeds([current_user.id, post_author_id])
+    except Exception:
+        pass
     
     return {"message": "Post unliked successfully"}
 
@@ -640,6 +674,12 @@ async def create_comment(
     _: None = Depends(engagement_rate_limit),
 ):
     """Add a comment to a post"""
+
+    if comment_data.post_id is not None and int(comment_data.post_id) != int(post_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="post_id mismatch between path and body",
+        )
     
     # Check if post exists
     post = db.query(Post).filter(Post.id == post_id).first()
@@ -674,6 +714,11 @@ async def create_comment(
     
     db.commit()
     db.refresh(new_comment)
+
+    try:
+        await invalidate_all_feeds([current_user.id, post.author_id])
+    except Exception:
+        pass
     
     # NOTIFICATION
     await create_notification(
@@ -759,7 +804,7 @@ async def upload_instagram_post(
     allowed_image_types = {"image/jpeg", "image/png", "image/gif", "image/webp"}
     allowed_video_types = {"video/mp4", "video/quicktime", "video/x-msvideo", "video/mpeg"}
     
-    content_type = file.content_type.lower() if file.content_type else ""
+    content_type = _resolve_upload_mime(file)
     
     is_image = content_type in allowed_image_types
     is_video = content_type in allowed_video_types
@@ -779,7 +824,10 @@ async def upload_instagram_post(
     # Read file content
     try:
         file_content = await file.read()
+        _validate_media_size(file_content, is_video=is_video)
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error reading file: {str(e)}"
@@ -992,7 +1040,7 @@ async def upload_multiple_media_posts(
     responses: List[InstagramFeedPostResponse] = []
 
     for idx, file in enumerate(files):
-        content_type = (file.content_type or '').lower()
+        content_type = _resolve_upload_mime(file)
         is_image = content_type in allowed_image_types
         is_video = content_type in allowed_video_types
         is_reel = idx in reel_indices and is_video
@@ -1002,7 +1050,10 @@ async def upload_multiple_media_posts(
 
         try:
             blob = await file.read()
+            _validate_media_size(blob, is_video=is_video)
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=500, detail="Error processing upload")
 
         try:
@@ -2043,7 +2094,7 @@ async def upload_multi_media_single_post(
 
     for carousel_position, original_index in enumerate(ordered_indices):
         file = files[original_index]
-        content_type = (file.content_type or '').lower()
+        content_type = _resolve_upload_mime(file)
         is_image = content_type in allowed_image_types
         is_video = content_type in allowed_video_types
         is_pdf = content_type in allowed_pdf_types
@@ -2051,7 +2102,10 @@ async def upload_multi_media_single_post(
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {content_type}")
         try:
             blob = await file.read()
+            _validate_media_size(blob, is_video=is_video)
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=500, detail="Error processing upload")
         try:
             if is_image:

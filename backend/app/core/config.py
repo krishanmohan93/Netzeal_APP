@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "NetZeal"
     DEBUG: bool = False
     REQUEST_TIMEOUT_SECONDS: int = 30
-    MAX_REQUEST_SIZE_BYTES: int = 10 * 1024 * 1024
+    MAX_REQUEST_SIZE_BYTES: int = 50 * 1024 * 1024
+    MAX_MEDIA_UPLOAD_SIZE_BYTES: int = 80 * 1024 * 1024
+    MAX_VIDEO_UPLOAD_SIZE_BYTES: int = 80 * 1024 * 1024
     GZIP_ENABLED: bool = True
     GZIP_MINIMUM_SIZE_BYTES: int = 1024
     FEED_CACHE_TTL_SECONDS: int = 30

@@ -39,6 +39,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     """Schema for user response"""
     id: int
+    public_id: Optional[str] = None
     auth_provider: str
     bio: Optional[str] = None
     profile_photo: Optional[str] = None
@@ -106,4 +107,9 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
+    new_password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
     new_password: str = Field(..., min_length=8, description="Password must be at least 8 characters")

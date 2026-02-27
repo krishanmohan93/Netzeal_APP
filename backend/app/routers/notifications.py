@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 from typing import List, Optional
 from uuid import UUID
 from ..core.database import get_db
@@ -39,12 +40,16 @@ async def get_notifications(
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
+    bounded_limit = min(max(limit, 1), 50)
+    bounded_skip = max(skip, 0)
+
     notifs = (
         db.query(Notification)
+        .options(joinedload(Notification.sender))
         .filter(Notification.recipient_id == current_user.id)
         .order_by(Notification.created_at.desc())
-        .offset(skip)
-        .limit(limit)
+        .offset(bounded_skip)
+        .limit(bounded_limit)
         .all()
     )
     return notifs
