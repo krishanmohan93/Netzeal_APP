@@ -7,6 +7,7 @@
     "owner": "krishanmohan",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon-1024.png",
     "splash": {
       "image": "./Logo_NetZeal.png",
       "resizeMode": "contain",
@@ -36,6 +37,10 @@
     },
     "android": {
       "backgroundColor": "#FFFFFF",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#FFFFFF"
+      },
       "package": "com.netzeal.app",
       "softwareKeyboardLayoutMode": "pan"
     },
@@ -46,6 +51,12 @@
           "include": []
         }
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/108fe6ee-3f41-4594-88c4-755f0f182add"
     }
   }
 }

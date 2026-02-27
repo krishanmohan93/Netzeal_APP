@@ -8,15 +8,27 @@ export const configureGoogleSignIn = () => {
     return { success: true };
   }
 
-  if (!API_CONFIG.GOOGLE_WEB_CLIENT_ID) {
+  const { webClientId, androidClientId, expoClientId, iosClientId } = API_CONFIG.GOOGLE_CLIENT_IDS;
+
+  if (!webClientId) {
     return {
       success: false,
       error: 'Missing EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID',
     };
   }
 
+  // Native Google Sign-In consumes webClientId/iosClientId. We still validate
+  // android/expo IDs because backend OAuth audience checks depend on them.
+  if (!androidClientId || !expoClientId) {
+    return {
+      success: false,
+      error: 'Missing EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID or EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID',
+    };
+  }
+
   GoogleSignin.configure({
-    webClientId: API_CONFIG.GOOGLE_WEB_CLIENT_ID,
+    webClientId,
+    iosClientId: iosClientId || undefined,
     scopes: ['email', 'profile'],
     offlineAccess: false,
     forceCodeForRefreshToken: false,

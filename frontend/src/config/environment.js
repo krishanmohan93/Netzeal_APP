@@ -8,13 +8,23 @@ import Constants from 'expo-constants';
 // Network Configuration
 const LOCAL_IP = process.env.EXPO_PUBLIC_LOCAL_IP || '10.181.184.75';
 const API_PORT = '8000';
-const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || null;
-const PRODUCTION_API_BASE_URL = process.env.EXPO_PUBLIC_PRODUCTION_API_BASE_URL || 'https://netzeal-app-1.onrender.com/api/v1';
+const DEFAULT_PRODUCTION_API_BASE_URL = 'https://netzeal-app-1.onrender.com/api/v1';
 const TIMEOUT = 30000; // 30 seconds
 const GOOGLE_EXPO_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID || null;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || null;
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || null;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || null;
+
+// Keep API URL normalization in one place to avoid trailing slash bugs in route joins.
+const normalizeApiBaseUrl = (url) => {
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+  return url.trim().replace(/\/+$/, '');
+};
+
+const EXPLICIT_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+const PRODUCTION_API_BASE_URL = normalizeApiBaseUrl(DEFAULT_PRODUCTION_API_BASE_URL);
 
 const getExpoHostIp = () => {
   const hostUri =
@@ -87,6 +97,12 @@ export const API_CONFIG = {
   GOOGLE_WEB_CLIENT_ID,
   GOOGLE_ANDROID_CLIENT_ID,
   GOOGLE_IOS_CLIENT_ID,
+  GOOGLE_CLIENT_IDS: {
+    webClientId: GOOGLE_WEB_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+    expoClientId: GOOGLE_EXPO_CLIENT_ID,
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+  },
   RETRY_ATTEMPTS: 1,
   RETRY_DELAY: 1000
 };
