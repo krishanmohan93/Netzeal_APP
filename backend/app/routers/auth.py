@@ -2,7 +2,7 @@
 Authentication routes - Email + Password + Google OAuth
 Production-ready authentication with Neon DB
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -27,6 +27,7 @@ from ..core.security import (
     get_current_user
 )
 from ..core.config import settings
+from ..core.cloudinary_config import cloudinary_service
 from ..core.rate_limit import strict_auth_rate_limit
 from ..utils.redis_cache import get_cached_json, set_cached_json, profile_cache_key, invalidate_profile_cache
 from ..models.user import User
@@ -45,6 +46,7 @@ from ..schemas.user import (
     VerifyEmailRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    ChangePasswordRequest,
 )
 from ..services.email_service import send_auth_email, render_auth_email_template
 
@@ -170,7 +172,8 @@ async def register(
             detail="Username already taken"
         )
     
-    # Create new user with email auth provider
+    # Create new user with email auth provider.
+    # Keep persistence atomic so token generation never races an uncommitted user row.
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
         email=user_data.email,
@@ -181,14 +184,24 @@ async def register(
         is_active=True,
         is_verified=False,
     )
-    
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
 
-    verification_token = _set_email_verification_token(new_user)
-    db.commit()
-    _send_verification_email(new_user, verification_token)
+    verification_token = None
+    try:
+        db.add(new_user)
+        db.flush()
+        verification_token = _set_email_verification_token(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except Exception:
+        db.rollback()
+        raise
+
+    # Email delivery must not fail registration itself.
+    if verification_token:
+        try:
+            _send_verification_email(new_user, verification_token)
+        except Exception as email_error:
+            print(f"⚠️ Verification email send failed for user {new_user.id}: {email_error}")
     
     # Create tokens
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -656,6 +669,37 @@ async def reset_password(
     return {"message": "Password reset successfully"}
 
 
+@router.post("/change-password")
+async def change_password(
+    request_data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: None = Depends(strict_auth_rate_limit),
+):
+    """Change current user's password with old password verification."""
+    if current_user.auth_provider == "google" and not current_user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Password change is not available for Google-only accounts"
+        )
+
+    if not current_user.hashed_password or not verify_password(
+        request_data.current_password,
+        current_user.hashed_password,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+
+    current_user.hashed_password = get_password_hash(request_data.new_password)
+    current_user.refresh_token_version = int(current_user.refresh_token_version or 0) + 1
+    db.commit()
+    db.refresh(current_user)
+
+    return {"message": "Password changed successfully"}
+
+
 # ==================== USER PROFILE ENDPOINTS ====================
 
 @router.get("/me", response_model=UserProfileResponse)
@@ -683,6 +727,7 @@ async def get_current_user_profile(
     
     profile_payload = {
         "id": current_user.id,
+        "public_id": str(current_user.public_id) if current_user.public_id else None,
         "email": current_user.email,
         "username": current_user.username,
         "auth_provider": current_user.auth_provider,
@@ -725,13 +770,141 @@ async def update_profile(
     
     for field, value in update_data.items():
         setattr(current_user, field, value)
-    
-    db.commit()
-    db.refresh(current_user)
+
+    try:
+        db.commit()
+        db.refresh(current_user)
+    except Exception:
+        db.rollback()
+        raise
 
     await invalidate_profile_cache([current_user.id])
     
     return current_user
+
+
+@router.post("/me/profile-photo")
+async def upload_profile_photo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload and persist current user's profile photo."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only image files are allowed"
+        )
+
+    file_content = await file.read()
+    if not file_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty"
+        )
+
+    if len(file_content) > settings.MAX_MEDIA_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Profile photo exceeds {settings.MAX_MEDIA_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit"
+        )
+
+    upload_result = await cloudinary_service.upload_image(
+        file_content=file_content,
+        filename=file.filename or f"profile_{current_user.id}.jpg",
+        folder="netzeal/profiles",
+        transformation={
+            "width": 512,
+            "height": 512,
+            "crop": "fill",
+            "gravity": "face",
+            "quality": "auto:good",
+            "fetch_format": "auto",
+        },
+    )
+
+    if not upload_result.get("success") or not upload_result.get("url"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to upload profile photo"
+        )
+
+    current_user.profile_photo = upload_result["url"]
+    db.commit()
+    db.refresh(current_user)
+    await invalidate_profile_cache([current_user.id])
+
+    return {
+        "message": "Profile photo updated successfully",
+        "profile_photo": current_user.profile_photo,
+        "public_id": upload_result.get("public_id"),
+    }
+
+
+@router.post("/me/resume")
+async def upload_resume(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload and persist current user's resume (PDF only)."""
+    allowed_types = {"application/pdf"}
+    if not file.content_type or file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF files are allowed"
+        )
+
+    file_content = await file.read()
+    if not file_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty"
+        )
+
+    max_resume_bytes = 10 * 1024 * 1024
+    if len(file_content) > max_resume_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Resume exceeds 10MB limit"
+        )
+
+    upload_result = await cloudinary_service.upload_raw(
+        file_content=file_content,
+        filename=file.filename or f"resume_{current_user.id}.pdf",
+        folder="netzeal/resumes",
+    )
+
+    if not upload_result.get("success") or not upload_result.get("url"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to upload resume"
+        )
+
+    existing_achievements = current_user.achievements if isinstance(current_user.achievements, list) else []
+    filtered_achievements = [
+        item for item in existing_achievements
+        if not (isinstance(item, dict) and item.get("type") == "resume")
+    ]
+
+    filtered_achievements.append({
+        "type": "resume",
+        "url": upload_result.get("url"),
+        "filename": file.filename,
+        "public_id": upload_result.get("public_id"),
+        "uploaded_at": datetime.utcnow().isoformat(),
+    })
+
+    current_user.achievements = filtered_achievements
+    db.commit()
+    db.refresh(current_user)
+    await invalidate_profile_cache([current_user.id])
+
+    return {
+        "message": "Resume uploaded successfully",
+        "resume_url": upload_result.get("url"),
+        "public_id": upload_result.get("public_id"),
+    }
 
 
 @router.get("/users/{user_id}", response_model=UserProfileResponse)
@@ -768,6 +941,7 @@ async def get_user_profile(
     
     profile_payload = {
         "id": user.id,
+        "public_id": str(user.public_id) if user.public_id else None,
         "email": user.email,
         "username": user.username,
         "auth_provider": user.auth_provider,

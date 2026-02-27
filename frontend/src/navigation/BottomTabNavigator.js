@@ -46,6 +46,9 @@ const BottomTabNavigator = () => {
           paddingBottom: 8,
           paddingTop: 8,
         },
+        tabBarItemStyle: {
+          marginHorizontal: 2,
+        },
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: '500',

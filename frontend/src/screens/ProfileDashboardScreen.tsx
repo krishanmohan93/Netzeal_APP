@@ -2,7 +2,7 @@
  * ProfileDashboardScreen
  * Complete profile screen with all sections: header, bio, projects, experience, posts, and CV upload
  */
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
 
 import ProfileHeader from '../components/ProfileHeader';
 import BioCard from '../components/BioCard';
@@ -168,8 +169,9 @@ const PostCard = ({
   const mediaType = post.media_type || (post.type === 'reel' ? 'video' : 'image');
   const isVideo = mediaType === 'video' || mediaType === 'reel' || post.type === 'reel';
   const rawCaption = post.caption || post.description || '';
-  const title = post.title ? String(post.title) : rawCaption.substring(0, 80);
-  const description = post.title ? String(rawCaption) : String(rawCaption);
+  const hasExplicitTitle = Boolean(post.title && String(post.title).trim());
+  const title = hasExplicitTitle ? String(post.title) : '';
+  const description = String(rawCaption);
   const authorName = post.author_full_name || post.author?.name || '';
   const authorUsername = post.author_username || post.author?.username || 'user';
   const authorId = post.author_id || post.author?.id || '';
@@ -177,7 +179,14 @@ const PostCard = ({
     ? String(authorUsername).substring(0, 2).toUpperCase()
     : post.author?.avatar || 'UN';
 
-  const isOwnPost = currentUserId && authorId === currentUserId;
+  const isOwnPost = String(authorId || '') === String(currentUserId || '');
+
+  useEffect(() => {
+    return () => {
+      videoRef.current?.pauseAsync?.().catch(() => { });
+      videoRef.current?.unloadAsync?.().catch(() => { });
+    };
+  }, []);
 
   const handleMenuAction = (action: string) => {
     setShowMenu(false);
@@ -191,12 +200,6 @@ const PostCard = ({
   const handleShareOption = async (option: string) => {
     setShowShareMenu(false);
     switch (option) {
-      case 'connections':
-        onShare && onShare(post, 'connections');
-        break;
-      case 'copy':
-        Alert.alert('Link Copied', 'Post link copied to clipboard');
-        break;
       case 'external':
         try {
           await RNShare.share({
@@ -293,9 +296,11 @@ const PostCard = ({
 
         {/* Content Section */}
         <View style={styles.contentSection}>
-          <Text style={styles.titleText} numberOfLines={2}>
-            {title}
-          </Text>
+          {hasExplicitTitle ? (
+            <Text style={styles.titleText} numberOfLines={2}>
+              {title}
+            </Text>
+          ) : null}
           <Text style={styles.descriptionText} numberOfLines={3}>
             {description}
           </Text>
@@ -328,34 +333,11 @@ const PostCard = ({
             <Text style={styles.actionText}>Share</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => onRepost && onRepost(post)}
-          >
-            <Icon name="repeat-outline" size={24} color={colors.textSecondary} />
-            <Text style={styles.actionText}>Repost</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Share Menu */}
         {showShareMenu && (
           <View style={styles.shareMenuPopup}>
-            <TouchableOpacity
-              style={styles.shareMenuItem}
-              onPress={() => handleShareOption('connections')}
-            >
-              <Icon name="people" size={22} color={colors.primary} />
-              <Text style={styles.shareMenuText}>Share with connections</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.shareMenuItem}
-              onPress={() => handleShareOption('copy')}
-            >
-              <Icon name="link" size={22} color={colors.primary} />
-              <Text style={styles.shareMenuText}>Copy link</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
             <TouchableOpacity
               style={styles.shareMenuItem}
               onPress={() => handleShareOption('external')}
@@ -382,6 +364,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cvUploading, setCvUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<string | null>(null); // For viewing other users
@@ -406,12 +389,13 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     try {
       // First get current logged-in user
       const userDataStr = await AsyncStorage.getItem('userData');
+      const legacyUserDataStr = await AsyncStorage.getItem('user_data');
       let loggedInUserId: string | null = null;
       let storedUserData: any = null;
 
-      if (userDataStr) {
+      if (userDataStr || legacyUserDataStr) {
         try {
-          storedUserData = JSON.parse(userDataStr);
+          storedUserData = JSON.parse(userDataStr || legacyUserDataStr || '{}');
           loggedInUserId = normalizeUserId(
             storedUserData?.public_id || storedUserData?.id || storedUserData?.user_id || storedUserData?.userId
           );
@@ -464,6 +448,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           const userData = await authAPI.getCurrentUser();
           if (userData) {
             await AsyncStorage.setItem('userData', JSON.stringify(userData));
+            await AsyncStorage.setItem('user_data', JSON.stringify(userData));
             const resolvedUserId = normalizeUserId(
               userData.public_id || userData.id || userData.user_id || userData.userId
             );
@@ -494,7 +479,13 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         }
       }
 
-      await loadUserPosts(userIdToLoad);
+      const effectiveUserId =
+        userIdToLoad ||
+        viewingUserId ||
+        loggedInUserId ||
+        normalizeUserId(storedUserData?.public_id || storedUserData?.id || storedUserData?.user_id || storedUserData?.userId);
+
+      await loadUserPosts(effectiveUserId);
     } catch (error) {
       setProfileError('Failed to load profile');
       setProfile(normalizeProfile({}, EMPTY_PROFILE));
@@ -566,19 +557,16 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
 
   const handleShare = async (post: Post) => {
     try {
-      await contentAPI.sharePost(post.id, 'connections');
-      Alert.alert('Success', 'Post shared with your connections');
+      await RNShare.share({
+        message: `${post.title || 'NetZeal Post'}\n\n${post.caption || post.description || ''}`,
+        title: post.title || 'NetZeal Post',
+      });
     } catch (error) {
     }
   };
 
   const handleRepost = async (post: Post) => {
-    try {
-      await contentAPI.repostContent(post.id);
-      Alert.alert('Success', 'Post reposted');
-      await loadUserPosts();
-    } catch (error) {
-    }
+    Alert.alert('Unavailable', 'Repost is currently unavailable in this build.');
   };
 
   const handleDelete = async (postId: string) => {
@@ -602,8 +590,50 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     navigation.navigate('CreatePost', { postToEdit: post });
   };
 
-  const handleCVUpload = () => {
-    Alert.alert('CV Upload', 'CV/Resume upload functionality');
+  const handleCVUpload = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const selectedFile = result.assets?.[0];
+      if (!selectedFile) {
+        Alert.alert('Upload Error', 'No file selected.');
+        return;
+      }
+
+      const isPdfByMime = selectedFile.mimeType === 'application/pdf';
+      const isPdfByName = String(selectedFile.name || '').toLowerCase().endsWith('.pdf');
+      if (!isPdfByMime && !isPdfByName) {
+        Alert.alert('Invalid File', 'Please select a PDF file.');
+        return;
+      }
+
+      const maxSizeBytes = 10 * 1024 * 1024;
+      if (typeof selectedFile.size === 'number' && selectedFile.size > maxSizeBytes) {
+        Alert.alert('File Too Large', 'PDF must be 10MB or smaller.');
+        return;
+      }
+
+      setCvUploading(true);
+      await authAPI.uploadResume(selectedFile);
+
+      const latestUser = await authAPI.getCurrentUser();
+      await AsyncStorage.setItem('userData', JSON.stringify(latestUser));
+      await AsyncStorage.setItem('user_data', JSON.stringify(latestUser));
+
+      Alert.alert('Success', 'CV uploaded successfully.');
+    } catch (error: any) {
+      Alert.alert('Upload Error', error?.userMessage || error?.response?.data?.detail || 'Failed to upload CV.');
+    } finally {
+      setCvUploading(false);
+    }
   };
 
   const handleOpenFullscreen = (index: number) => {
@@ -629,7 +659,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   if (profileLoading) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.loadingContainer}>
+        <View style={styles.profileLoadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Loading profile...</Text>
         </View>
@@ -764,7 +794,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         </ScrollView>
 
         {/* Sticky CV Upload Card - Only show for own profile */}
-        {isOwnProfile && <CVUploadCard onPress={handleCVUpload} isSticky />}
+        {isOwnProfile && <CVUploadCard onPress={handleCVUpload} isSticky loading={cvUploading} />}
 
         {/* Fullscreen Media Viewer */}
         <FullscreenMediaViewer
@@ -823,6 +853,11 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     paddingVertical: spacing.xl,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileLoadingContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },

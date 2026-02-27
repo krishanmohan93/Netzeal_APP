@@ -54,9 +54,11 @@ const UserRecCard = ({ user, onConnect }) => (
     {!!(user.skills && user.skills.length) && (
       <Text style={styles.recReason} numberOfLines={2}>Skills: {user.skills.slice(0,5).join(', ')}</Text>
     )}
-    <TouchableOpacity style={[styles.smallBtn, { marginTop: spacing.sm }]} onPress={onConnect}>
-      <Text style={styles.smallBtnText}>Connect</Text>
-    </TouchableOpacity>
+    {onConnect ? (
+      <TouchableOpacity style={[styles.smallBtn, { marginTop: spacing.sm }]} onPress={onConnect}>
+        <Text style={styles.smallBtnText}>Connect</Text>
+      </TouchableOpacity>
+    ) : null}
   </View>
 );
 
@@ -64,9 +66,11 @@ const OpportunityCard = ({ item, onApply }) => (
   <View style={styles.recommendationCard}>
     <Text style={styles.recTitle}>{item.title || 'Opportunity'}</Text>
     {!!item.content && (<Text style={styles.recReason} numberOfLines={3}>{item.content}</Text>)}
-    <TouchableOpacity style={[styles.smallBtn, { marginTop: spacing.sm }]} onPress={onApply}>
-      <Text style={styles.smallBtnText}>Apply</Text>
-    </TouchableOpacity>
+    {onApply ? (
+      <TouchableOpacity style={[styles.smallBtn, { marginTop: spacing.sm }]} onPress={onApply}>
+        <Text style={styles.smallBtnText}>Apply</Text>
+      </TouchableOpacity>
+    ) : null}
   </View>
 );
 
@@ -74,67 +78,86 @@ const AIBotScreen = () => {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [userProfile, setUserProfile] = useState(null);
+  const [initializing, setInitializing] = useState(true);
+  const [assistantError, setAssistantError] = useState('');
   const flatListRef = useRef(null);
   const insets = useSafeAreaInsets();
   const [inputBarHeight, setInputBarHeight] = useState(56);
   const [composerInputHeight, setComposerInputHeight] = useState(44);
 
   useEffect(() => {
-    loadUserProfile();
-    loadConversationHistory();
+    initializeAssistant();
   }, []);
+
+  const initializeAssistant = async () => {
+    setInitializing(true);
+    setAssistantError('');
+    try {
+      await Promise.all([loadUserProfile(), loadConversationHistory()]);
+    } catch (error) {
+      if (error?.response?.status !== 401) {
+        setAssistantError('Unable to load AI Assistant right now. Please try again.');
+      }
+    } finally {
+      setInitializing(false);
+    }
+  };
 
   const loadUserProfile = async () => {
     try {
       const profile = await aiAPI.getUserProfile();
-      setUserProfile(profile);
+      return profile;
     } catch (error) {
       // 401 errors are handled by API interceptor (auto-redirect to login)
       // Only log other errors
       if (error.response?.status !== 401) {
         console.error('Error loading user profile:', error);
       }
+      throw error;
     }
   };
 
   const loadConversationHistory = async () => {
     try {
-      const history = await aiAPI.getConversationHistory(10);
+      const historyResponse = await aiAPI.getConversationHistory(10);
+      const history = Array.isArray(historyResponse) ? historyResponse : [];
       const formattedMessages = [];
       
       history.reverse().forEach(conv => {
         formattedMessages.push({
           id: `user-${conv.id}`,
-          content: conv.message,
+          content: conv.message || '...',
           isUser: true,
-          timestamp: conv.created_at,
+          timestamp: conv.created_at || new Date().toISOString(),
         });
         formattedMessages.push({
           id: `ai-${conv.id}`,
-          content: conv.response,
+          content: conv.response || 'I do not have a response for this message.',
           isUser: false,
-          timestamp: conv.created_at,
+          timestamp: conv.created_at || new Date().toISOString(),
           recommendations: conv.recommendations,
         });
       });
       
       setMessages(formattedMessages);
+      return formattedMessages;
     } catch (error) {
       // 401 errors are handled by API interceptor (auto-redirect to login)
       // Only log other errors
       if (error.response?.status !== 401) {
         console.error('Error loading conversation history:', error);
       }
+      throw error;
     }
   };
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
+    const messageToSend = inputText.trim();
 
     const userMessage = {
       id: `user-${Date.now()}`,
-      content: inputText.trim(),
+      content: messageToSend,
       isUser: true,
       timestamp: new Date().toISOString(),
     };
@@ -144,25 +167,21 @@ const AIBotScreen = () => {
     setLoading(true);
 
     try {
-      // Build user context for AI
-      const userContext = userProfile ? {
-        skills: userProfile.skills || [],
-        interests: userProfile.interests || [],
-        career_stage: userProfile.headline || 'Developer',
-        recent_activity: 'Active on NetZeal',
-      } : null;
-
-      const response = await aiAPI.chat(inputText.trim(), userContext);
+      const response = await aiAPI.chat(messageToSend);
+      const aiContent =
+        typeof response?.response === 'string' && response.response.trim().length > 0
+          ? response.response
+          : 'I could not generate a response right now. Please try again.';
       
       const aiMessage = {
         id: `ai-${Date.now()}`,
-        content: response.response,
+        content: aiContent,
         isUser: false,
-        timestamp: response.created_at,
-        recommendations: response.recommendations,
-        recommendations_content: response.recommendations_content,
-        recommendations_users: response.recommendations_users,
-        recommendations_opportunities: response.recommendations_opportunities,
+        timestamp: response?.created_at || new Date().toISOString(),
+        recommendations: Array.isArray(response?.recommendations) ? response.recommendations : [],
+        recommendations_content: Array.isArray(response?.recommendations_content) ? response.recommendations_content : [],
+        recommendations_users: Array.isArray(response?.recommendations_users) ? response.recommendations_users : [],
+        recommendations_opportunities: Array.isArray(response?.recommendations_opportunities) ? response.recommendations_opportunities : [],
       };
       
       setMessages(prev => [...prev, aiMessage]);
@@ -201,6 +220,30 @@ const AIBotScreen = () => {
     }
   };
 
+  if (initializing && messages.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centerState}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.stateText}>Loading AI Assistant...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (assistantError && messages.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centerState}>
+          <Text style={styles.stateText}>{assistantError}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={initializeAssistant}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const renderItem = ({ item }) => {
     return (
       <View>
@@ -228,11 +271,11 @@ const AIBotScreen = () => {
               <UserRecCard
                 key={`u-${index}`}
                 user={u}
-                onConnect={async () => {
+                onConnect={u?.id ? async () => {
                   try {
                     await socialAPI.followUser(u.id);
                   } catch (e) { /* noop */ }
-                }}
+                } : undefined}
               />
             ))}
           </View>
@@ -244,11 +287,11 @@ const AIBotScreen = () => {
               <OpportunityCard
                 key={`o-${index}`}
                 item={op}
-                onApply={async () => {
+                onApply={op?.author_id ? async () => {
                   try {
                     await collabAPI.apply({ toUserId: op.author_id, topic: op.title, message: 'Hi! I saw this and would like to collaborate/work on it.' });
                   } catch (e) { /* noop */ }
-                }}
+                } : undefined}
               />
             ))}
           </View>
@@ -405,6 +448,30 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.surface,
     position: 'relative',
+  },
+  centerState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  stateText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: spacing.md,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  retryButtonText: {
+    ...typography.bodySmall,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,

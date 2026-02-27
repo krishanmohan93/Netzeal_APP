@@ -81,10 +81,12 @@ const NotificationsScreen = () => {
       onPress={() => handlePress(item)}
       disabled={pendingReadId === item.id}
     >
-      <Image
-        source={{ uri: normalizeUri(item.sender?.profile_photo) || 'https://via.placeholder.com/50' }}
-        style={styles.avatar}
-      />
+      <View style={styles.avatarContainer}>
+        <Image
+          source={{ uri: normalizeUri(item.sender?.profile_photo) || 'https://via.placeholder.com/50' }}
+          style={styles.avatar}
+        />
+      </View>
       <View style={[styles.content, pendingReadId === item.id && { opacity: 0.6 }]}>
         <Text style={styles.text}>
           <Text style={styles.username}>{item.sender?.username} </Text>
@@ -151,23 +153,31 @@ const styles = StyleSheet.create({
   },
   item: {
     flexDirection: 'row',
-    padding: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 0.5,
     borderBottomColor: '#eee',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   unreadItem: {
     backgroundColor: '#f0f9ff',
+  },
+  avatarContainer: {
+    width: 44,
+    height: 44,
+    marginRight: 12,
+    marginTop: 2,
   },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    marginRight: 12,
     backgroundColor: '#ddd',
   },
   content: {
     flex: 1,
+    justifyContent: 'center',
+    minHeight: 44,
   },
   text: {
     fontSize: 14,

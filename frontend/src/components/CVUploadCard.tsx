@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
@@ -16,11 +17,13 @@ import { colors, spacing, typography, borderRadius, shadows } from '../utils/the
 interface CVUploadCardProps {
   onPress: () => void;
   isSticky?: boolean;
+  loading?: boolean;
 }
 
 const CVUploadCard: React.FC<CVUploadCardProps> = ({
   onPress,
   isSticky = false,
+  loading = false,
 }) => {
   return (
     <View style={[styles.container, isSticky && styles.stickyContainer]}>
@@ -28,6 +31,7 @@ const CVUploadCard: React.FC<CVUploadCardProps> = ({
         style={styles.card}
         onPress={onPress}
         activeOpacity={0.8}
+        disabled={loading}
       >
         <Ionicons
           name="cloud-upload-outline"
@@ -36,15 +40,19 @@ const CVUploadCard: React.FC<CVUploadCardProps> = ({
           style={styles.icon}
         />
         <View style={styles.content}>
-          <Text style={styles.cardTitle}>CV Upload</Text>
-          <Text style={styles.cardSubtitle}>Upload CV / Resume</Text>
+          <Text style={styles.cardTitle}>{loading ? 'Uploading CV...' : 'CV Upload'}</Text>
+          <Text style={styles.cardSubtitle}>{loading ? 'Please wait' : 'Upload CV / Resume'}</Text>
         </View>
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color={colors.surface}
-          style={styles.chevron}
-        />
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.surface} style={styles.chevron} />
+        ) : (
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color={colors.surface}
+            style={styles.chevron}
+          />
+        )}
       </TouchableOpacity>
     </View>
   );

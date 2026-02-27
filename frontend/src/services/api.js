@@ -203,6 +203,12 @@ api.interceptors.response.use(
 
     // Try retry for network errors
     if (!error.response && error.config && !error.config.__isRetryRequest) {
+      console.warn('[API_NETWORK_ERROR]', {
+        baseURL: API_CONFIG.BASE_URL,
+        requestUrl: error.config?.url,
+        method: error.config?.method,
+        message: error.message,
+      });
       error.config.__isRetryRequest = true;
       try {
         return await retryRequest(error);
@@ -361,6 +367,43 @@ export const authAPI = {
 
   updateProfile: async (profileData) => {
     const response = await api.put('/auth/me', profileData);
+    return response.data;
+  },
+
+  changePassword: async (payload) => {
+    const response = await api.post('/auth/change-password', payload);
+    return response.data;
+  },
+
+  uploadProfilePhoto: async (asset) => {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: asset.uri,
+      name: asset.fileName || `profile_${Date.now()}.jpg`,
+      type: asset.mimeType || asset.type || 'image/jpeg',
+    });
+
+    const response = await api.post('/auth/me/profile-photo', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  },
+
+  uploadResume: async (fileAsset) => {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: fileAsset.uri,
+      name: fileAsset.name || `resume_${Date.now()}.pdf`,
+      type: fileAsset.mimeType || 'application/pdf',
+    });
+
+    const response = await api.post('/auth/me/resume', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
     return response.data;
   },
 
@@ -534,11 +577,8 @@ export const contentAPI = {
 
 // AI API
 export const aiAPI = {
-  chat: async (message, userContext = null) => {
-    const response = await api.post('/ai/chat', {
-      message,
-      user_context: userContext
-    });
+  chat: async (message) => {
+    const response = await api.post('/ai/chat', { message });
     return response.data;
   },
 
