@@ -57,6 +57,7 @@ const QuickLinkCard = ({ icon, title, subtitle, onPress, color }) => (
 
 const HelpScreen = ({ navigation }) => {
   const [supportMessage, setSupportMessage] = useState('');
+  const supportEmail = 'netzeal.in@gmail.com';
 
   const faqs = [
     {
@@ -91,18 +92,22 @@ const HelpScreen = ({ navigation }) => {
 
   const handleContactSupport = () => {
     if (supportMessage.trim()) {
-      Alert.alert(
-        'Message Sent',
-        'Thank you for contacting us! We\'ll get back to you within 24 hours.',
-        [{ text: 'OK', onPress: () => setSupportMessage('') }]
-      );
+      const subject = encodeURIComponent('NetZeal Support Request');
+      const body = encodeURIComponent(supportMessage.trim());
+      Linking.openURL(`mailto:${supportEmail}?subject=${subject}&body=${body}`)
+        .then(() => setSupportMessage(''))
+        .catch(() => {
+          Alert.alert('Unable to open email app', `Please email us directly at ${supportEmail}.`);
+        });
     } else {
       Alert.alert('Message Empty', 'Please enter a message before sending.');
     }
   };
 
   const openEmail = () => {
-    Linking.openURL('mailto:support@netzeal.com?subject=Support Request');
+    Linking.openURL(`mailto:${supportEmail}?subject=Support Request`).catch(() => {
+      Alert.alert('Unable to open email app', `Please email us directly at ${supportEmail}.`);
+    });
   };
 
   const openWebsite = () => {
@@ -165,6 +170,9 @@ const HelpScreen = ({ navigation }) => {
           <Text style={styles.sectionTitle}>SEND US A MESSAGE</Text>
           <View style={styles.contactForm}>
             <Text style={styles.contactFormLabel}>Describe your issue or question</Text>
+            <Text style={styles.contactHelperText}>
+              This opens your email app with your message so support can reply.
+            </Text>
             <TextInput
               style={styles.contactInput}
               placeholder="Type your message here..."
@@ -208,7 +216,7 @@ const HelpScreen = ({ navigation }) => {
         <View style={styles.footer}>
           <Text style={styles.footerText}>
             Still need help? Email us at{' '}
-            <Text style={styles.footerLink}>support@netzeal.com</Text>
+            <Text style={styles.footerLink}>{supportEmail}</Text>
           </Text>
         </View>
       </ScrollView>
@@ -328,6 +336,11 @@ const styles = StyleSheet.create({
     ...typography.body,
     fontWeight: '600',
     color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  contactHelperText: {
+    ...typography.caption,
+    color: colors.textSecondary,
     marginBottom: spacing.sm,
   },
   contactInput: {

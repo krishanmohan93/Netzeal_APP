@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import Slider from '@react-native-community/slider';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 
 /**
  * Temporary local stub for uploadMedia to avoid missing-module compile errors.
@@ -35,6 +35,22 @@ export default function ReelEditorScreen() {
   const [start, setStart] = useState(0);
   const [duration, setDuration] = useState(15);
   const [processing, setProcessing] = useState(false);
+  const videoRef = useRef<Video | null>(null);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      return () => {
+        videoRef.current?.pauseAsync?.().catch(() => {});
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    return () => {
+      videoRef.current?.pauseAsync?.().catch(() => {});
+      videoRef.current?.unloadAsync?.().catch(() => {});
+    };
+  }, []);
 
   const publishReel = async () => {
     setProcessing(true);
@@ -51,7 +67,7 @@ export default function ReelEditorScreen() {
 
   return (
     <View style={styles.container}>
-      <Video source={{ uri }} style={styles.video} resizeMode={ResizeMode.CONTAIN} shouldPlay isLooping />
+      <Video ref={videoRef} source={{ uri }} style={styles.video} resizeMode={ResizeMode.CONTAIN} shouldPlay isLooping />
       <Text style={styles.label}>Trim Start: {start.toFixed(1)}s</Text>
       <Slider minimumValue={0} maximumValue={45} value={start} onValueChange={setStart} style={styles.slider} />
       <Text style={styles.label}>Duration: {duration.toFixed(1)}s</Text>

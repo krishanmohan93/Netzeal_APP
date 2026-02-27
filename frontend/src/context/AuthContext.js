@@ -338,19 +338,20 @@ export const AuthProvider = ({ children }) => {
   // Logout
   const logout = async () => {
     try {
-      // Call logout endpoint on backend
-      if (tokens.access) {
-        await fetchAuthWithFallback('/auth/logout', {
+      const accessToken = tokens.access;
+      await clearSession();
+
+      if (accessToken) {
+        fetchAuthWithFallback('/auth/logout', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${tokens.access}`,
+            'Authorization': `Bearer ${accessToken}`,
           },
         }).catch(() => {
           // Ignore errors if backend is unreachable
         });
       }
 
-      await clearSession();
       return { success: true };
     } catch (error) {
       // Still clear local session even if backend logout fails

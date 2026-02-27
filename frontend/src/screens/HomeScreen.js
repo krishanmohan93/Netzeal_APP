@@ -132,14 +132,22 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
   const isVideo = mediaType === 'video' || mediaType === 'reel' || post.type === 'reel';
   // Prevent duplicate title rendering: if title exists, description excludes repeating caption start.
   const rawCaption = post.caption || post.description || '';
-  const title = post.title ? post.title : rawCaption.substring(0, 80);
-  const description = post.title ? rawCaption : rawCaption; // UI will render title once.
+  const hasExplicitTitle = Boolean(post.title && String(post.title).trim());
+  const title = hasExplicitTitle ? String(post.title) : '';
+  const description = rawCaption;
   const authorName = post.author_full_name || post.author?.name;
   const authorUsername = post.author_username || post.author?.username;
   const authorId = post.author_id || post.author?.id;
   const authorAvatar = authorUsername ? authorUsername.substring(0, 2).toUpperCase() : (post.author?.avatar || 'UN');
 
-  const isOwnPost = currentUserId && authorId === currentUserId;
+  const isOwnPost = String(authorId || '') === String(currentUserId || '');
+
+  useEffect(() => {
+    return () => {
+      videoRef.current?.pauseAsync?.().catch(() => { });
+      videoRef.current?.unloadAsync?.().catch(() => { });
+    };
+  }, []);
 
   const handleMenuAction = (action) => {
     setShowMenu(false);
@@ -154,13 +162,6 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
   const handleShareOption = async (option) => {
     setShowShareMenu(false);
     switch (option) {
-      case 'connections':
-        onShare && onShare(post, 'connections');
-        break;
-      case 'copy':
-        // Copy link functionality
-        Alert.alert('Link Copied', 'Post link copied to clipboard');
-        break;
       case 'external':
         try {
           await Share.share({
@@ -279,9 +280,11 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
 
         {/* Content Section */}
         <View style={styles.contentSection}>
-          <Text style={styles.titleText} numberOfLines={2}>
-            {title}
-          </Text>
+          {hasExplicitTitle ? (
+            <Text style={styles.titleText} numberOfLines={2}>
+              {title}
+            </Text>
+          ) : null}
           <Text style={styles.descriptionText} numberOfLines={3}>
             {description}
           </Text>
@@ -324,35 +327,11 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
             <Icon name="arrow-redo-outline" size={24} color={colors.textSecondary} />
             <Text style={styles.actionText}>Share</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => onRepost && onRepost(post)}
-          >
-            <Icon name="repeat-outline" size={24} color={colors.textSecondary} />
-            <Text style={styles.actionText}>Repost</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Share Menu Popup */}
         {showShareMenu && (
           <View style={styles.shareMenuPopup}>
-            <TouchableOpacity
-              style={styles.shareMenuItem}
-              onPress={() => handleShareOption('connections')}
-            >
-              <Icon name="people" size={22} color={colors.primary} />
-              <Text style={styles.shareMenuText}>Share with connections</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.shareMenuItem}
-              onPress={() => handleShareOption('copy')}
-            >
-              <Icon name="link" size={22} color={colors.primary} />
-              <Text style={styles.shareMenuText}>Copy link</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
             <TouchableOpacity
               style={styles.shareMenuItem}
               onPress={() => handleShareOption('external')}

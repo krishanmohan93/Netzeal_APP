@@ -2,7 +2,7 @@
  * CreatePostScreen - Multi-Media Post Creation
  * Production-grade Instagram-like post creation with carousel support
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -15,15 +15,14 @@ import {
   Platform,
   ActivityIndicator,
   StatusBar,
+  Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors, spacing, borderRadius } from '../utils/theme';
 import MediaPickerGrid from '../components/MediaPickerGrid';
-import ZoomableImage from '../components/ZoomableImage';
 import ImageEditor from '../components/ImageEditor';
-import MediaPickerBottomSheet from '../components/MediaPickerBottomSheet';
 import { contentAPI } from '../services/api';
 
 const MAX_CAPTION = 2000;
@@ -31,7 +30,6 @@ const MAX_MEDIA = 10;
 
 const CreatePostScreen = ({ navigation }) => {
   const [mediaItems, setMediaItems] = useState([]);
-  const [sheetVisible, setSheetVisible] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [title, setTitle] = useState('');
   const [caption, setCaption] = useState('');
@@ -170,30 +168,6 @@ const CreatePostScreen = ({ navigation }) => {
 
       return updated;
     });
-  };
-
-  const handleMediaSelected = (selectedAssets) => {
-    const normalized = selectedAssets.map((asset) => {
-      const isVideo = asset.mediaType === 'video' || asset.uri.endsWith('.mp4');
-      const isReel =
-        isVideo &&
-        asset.height > asset.width &&
-        (asset.duration ?? 0) <= 60;
-
-      return {
-        uri: asset.uri,
-        name: asset.fileName || `media_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
-        mime: isVideo ? 'video/mp4' : 'image/jpeg',
-        type: isVideo ? 'video' : 'image',
-        isReel,
-        width: asset.width,
-        height: asset.height,
-      };
-    });
-
-    setMediaItems((prev) => [...prev, ...normalized].slice(0, MAX_MEDIA));
-    if (mediaItems.length === 0) setActiveIndex(0);
-    setSheetVisible(false);
   };
 
   /**
@@ -377,12 +351,8 @@ const CreatePostScreen = ({ navigation }) => {
     // Handle images and videos
     return (
       <View style={styles.activeMediaContainer}>
-        <ZoomableImage
-          uri={item.uri}
-          containerW={'100%'}
-          containerH={360}
-          onError={(msg) => console.warn(msg)}
-        />
+        {/* Keep preview non-interactive to avoid accidental auto zoom/crop while composing */}
+        <Image source={{ uri: item.uri }} style={styles.staticPreviewImage} resizeMode="contain" />
         {item.isReel && (
           <View style={styles.reelBadge}>
             <Icon name="videocam" size={14} color="#fff" />
@@ -483,21 +453,6 @@ const CreatePostScreen = ({ navigation }) => {
             </View>
           </>
         )}
-
-        {/* Professional Feature Pills */}
-        <View style={styles.featuresRow}>
-          {[
-            { icon: 'resize', label: 'Auto-resize' },
-            { icon: 'videocam', label: 'Reel detector' },
-            { icon: 'document', label: 'PDF Support' },
-            { icon: 'crop', label: 'Edit' }
-          ].map((f, i) => (
-            <View key={i} style={styles.featurePill}>
-              <Icon name={f.icon} size={14} color="#666" />
-              <Text style={styles.featurePillText}>{f.label}</Text>
-            </View>
-          ))}
-        </View>
 
         {/* Title Input */}
         <TextInput
@@ -715,6 +670,11 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 4,
+  },
+  staticPreviewImage: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
   },
   reelBadge: {
     position: 'absolute',

@@ -1,7 +1,7 @@
 /**
  * Settings Screen - Account settings and preferences
  */
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,16 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
+  ActivityIndicator,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { colors, spacing, typography, borderRadius } from '../utils/theme';
 import { useAuth } from '../context/AuthContext';
+import { authAPI } from '../services/api';
 
 const SettingItem = ({ icon, title, subtitle, onPress, showArrow = true, rightComponent }) => (
   <TouchableOpacity style={styles.settingItem} onPress={onPress} disabled={!onPress}>
@@ -33,7 +38,50 @@ const SettingsScreen = ({ navigation }) => {
   const auth = useAuth();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [changePasswordVisible, setChangePasswordVisible] = useState(false);
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: '',
+    new_password: '',
+    confirm_password: '',
+  });
+
+  useEffect(() => {
+    const loadPreferences = async () => {
+      try {
+        const values = await AsyncStorage.multiGet(['darkMode', 'pushNotifications']);
+        const storedDarkMode = values.find(([key]) => key === 'darkMode')?.[1];
+        const storedPush = values.find(([key]) => key === 'pushNotifications')?.[1];
+        if (storedDarkMode !== null) {
+          setDarkMode(storedDarkMode === 'true');
+        }
+        if (storedPush !== null) {
+          setNotificationsEnabled(storedPush === 'true');
+        }
+      } catch (error) {
+        console.error('Error loading settings preferences:', error);
+      }
+    };
+
+    loadPreferences();
+  }, []);
+
+  const passwordValidationMessage = useMemo(() => {
+    if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+      return 'All password fields are required.';
+    }
+    if (passwordForm.new_password.length < 8) {
+      return 'New password must be at least 8 characters.';
+    }
+    if (passwordForm.new_password !== passwordForm.confirm_password) {
+      return 'New password and confirm password do not match.';
+    }
+    if (passwordForm.current_password === passwordForm.new_password) {
+      return 'New password must be different from current password.';
+    }
+    return '';
+  }, [passwordForm]);
 
   const handleDeleteAccount = () => {
     Alert.alert(
@@ -53,6 +101,48 @@ const SettingsScreen = ({ navigation }) => {
     );
   };
 
+  const handleChangePassword = async () => {
+    if (passwordValidationMessage) {
+      Alert.alert('Validation Error', passwordValidationMessage);
+      return;
+    }
+
+    try {
+      setChangePasswordLoading(true);
+      await authAPI.changePassword({
+        current_password: passwordForm.current_password,
+        new_password: passwordForm.new_password,
+      });
+      setChangePasswordVisible(false);
+      setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
+      Alert.alert('Success', 'Password updated successfully.');
+    } catch (error) {
+      console.error('Change password error:', error);
+      Alert.alert('Error', error?.userMessage || error?.response?.data?.detail || 'Failed to change password.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
+  const handleToggleDarkMode = async (value) => {
+    try {
+      setDarkMode(value);
+      await AsyncStorage.setItem('darkMode', value.toString());
+      Alert.alert('Theme Preference Saved', 'Theme changes apply after app restart.');
+    } catch (error) {
+      console.error('Error saving dark mode preference:', error);
+    }
+  };
+
+  const handleTogglePushNotifications = async (value) => {
+    try {
+      setNotificationsEnabled(value);
+      await AsyncStorage.setItem('pushNotifications', value.toString());
+    } catch (error) {
+      console.error('Error saving notification preference:', error);
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
@@ -61,12 +151,15 @@ const SettingsScreen = ({ navigation }) => {
         style: 'destructive',
         onPress: async () => {
           try {
+            setLoggingOut(true);
             // Use Auth context to logout
             await auth.logout();
             // Navigation will be handled automatically by the auth state change
           } catch (error) {
             console.error('Logout error:', error);
             Alert.alert('Error', 'Failed to logout. Please try again.');
+          } finally {
+            setLoggingOut(false);
           }
         },
       },
@@ -88,14 +181,14 @@ const SettingsScreen = ({ navigation }) => {
           <SettingItem
             icon="shield-checkmark-outline"
             title="Privacy & Security"
-            subtitle="Manage your privacy settings"
-            onPress={() => Alert.alert('Coming Soon', 'Privacy settings coming soon!')}
+            subtitle="Your privacy controls are managed in Privacy Policy"
+            onPress={() => navigation.navigate('PrivacyPolicy')}
           />
           <SettingItem
             icon="key-outline"
             title="Change Password"
             subtitle="Update your password"
-            onPress={() => Alert.alert('Coming Soon', 'Password change coming soon!')}
+            onPress={() => setChangePasswordVisible(true)}
           />
         </View>
 
@@ -110,7 +203,7 @@ const SettingsScreen = ({ navigation }) => {
             rightComponent={
               <Switch
                 value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
+                onValueChange={handleTogglePushNotifications}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFFFFF"
               />
@@ -119,8 +212,8 @@ const SettingsScreen = ({ navigation }) => {
           <SettingItem
             icon="mail-outline"
             title="Email Notifications"
-            subtitle="Receive email updates"
-            onPress={() => Alert.alert('Coming Soon', 'Email preferences coming soon!')}
+            subtitle="Email updates are currently tied to account alerts"
+            showArrow={false}
           />
         </View>
 
@@ -135,21 +228,7 @@ const SettingsScreen = ({ navigation }) => {
             rightComponent={
               <Switch
                 value={darkMode}
-                onValueChange={setDarkMode}
-                trackColor={{ false: colors.border, true: colors.primary }}
-                thumbColor="#FFFFFF"
-              />
-            }
-          />
-          <SettingItem
-            icon="play-outline"
-            title="Auto-play Videos"
-            subtitle="Automatically play videos in feed"
-            showArrow={false}
-            rightComponent={
-              <Switch
-                value={autoPlay}
-                onValueChange={setAutoPlay}
+                onValueChange={handleToggleDarkMode}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFFFFF"
               />
@@ -163,14 +242,14 @@ const SettingsScreen = ({ navigation }) => {
           <SettingItem
             icon="language-outline"
             title="Language"
-            subtitle="English"
-            onPress={() => Alert.alert('Coming Soon', 'Language selection coming soon!')}
+            subtitle="English (app default)"
+            showArrow={false}
           />
           <SettingItem
             icon="cloud-download-outline"
             title="Data Usage"
-            subtitle="Manage data and storage"
-            onPress={() => Alert.alert('Coming Soon', 'Data usage settings coming soon!')}
+            subtitle="Adaptive quality is managed automatically"
+            showArrow={false}
           />
         </View>
 
@@ -209,8 +288,9 @@ const SettingsScreen = ({ navigation }) => {
           <SettingItem
             icon="log-out-outline"
             title="Logout"
-            subtitle="Sign out of your account"
-            onPress={handleLogout}
+            subtitle={loggingOut ? 'Signing out...' : 'Sign out of your account'}
+            onPress={loggingOut ? undefined : handleLogout}
+            rightComponent={loggingOut ? <ActivityIndicator size="small" color={colors.primary} /> : undefined}
           />
           <SettingItem
             icon="trash-outline"
@@ -224,6 +304,66 @@ const SettingsScreen = ({ navigation }) => {
           <Text style={styles.footerText}>Made with ❤️ by NetZeal Team</Text>
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={changePasswordVisible}
+        onRequestClose={() => setChangePasswordVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Change Password</Text>
+
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="Current password"
+              secureTextEntry
+              value={passwordForm.current_password}
+              onChangeText={(text) => setPasswordForm((prev) => ({ ...prev, current_password: text }))}
+              autoCapitalize="none"
+            />
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="New password"
+              secureTextEntry
+              value={passwordForm.new_password}
+              onChangeText={(text) => setPasswordForm((prev) => ({ ...prev, new_password: text }))}
+              autoCapitalize="none"
+            />
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="Confirm new password"
+              secureTextEntry
+              value={passwordForm.confirm_password}
+              onChangeText={(text) => setPasswordForm((prev) => ({ ...prev, confirm_password: text }))}
+              autoCapitalize="none"
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setChangePasswordVisible(false)}
+                disabled={changePasswordLoading}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.savePasswordButton]}
+                onPress={handleChangePassword}
+                disabled={changePasswordLoading}
+              >
+                {changePasswordLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.savePasswordButtonText}>Update</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -281,6 +421,64 @@ const styles = StyleSheet.create({
   footerText: {
     ...typography.caption,
     color: colors.textLight,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    padding: spacing.md,
+  },
+  modalCard: {
+    backgroundColor: colors.background,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+  },
+  modalTitle: {
+    ...typography.h4,
+    color: colors.text,
+    marginBottom: spacing.md,
+    fontWeight: '600',
+  },
+  passwordInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    color: colors.text,
+    backgroundColor: colors.surface,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: spacing.sm,
+  },
+  modalButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    marginLeft: spacing.sm,
+    minWidth: 90,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cancelButtonText: {
+    ...typography.body,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  savePasswordButton: {
+    backgroundColor: colors.primary,
+  },
+  savePasswordButtonText: {
+    ...typography.body,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
 });
 

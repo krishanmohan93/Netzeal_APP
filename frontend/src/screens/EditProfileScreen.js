@@ -26,6 +26,7 @@ import { normalizeUri } from '../utils/media';
 const EditProfileScreen = ({ navigation, route }) => {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
     const [profileData, setProfileData] = useState({
         full_name: '',
         bio: '',
@@ -86,13 +87,24 @@ const EditProfileScreen = ({ navigation, route }) => {
             });
 
             if (!result.canceled && result.assets[0]) {
-                // For now, just store the local URI
-                // In production, you'd upload to a server/cloud storage
-                setProfileData({ ...profileData, profile_photo: result.assets[0].uri });
+                const pickedAsset = result.assets[0];
+                setUploadingProfilePhoto(true);
+
+                const uploadResponse = await authAPI.uploadProfilePhoto(pickedAsset);
+                const uploadedUrl = uploadResponse?.profile_photo;
+
+                if (!uploadedUrl) {
+                    throw new Error('Upload succeeded but no profile URL returned');
+                }
+
+                setProfileData((prev) => ({ ...prev, profile_photo: uploadedUrl }));
+                Alert.alert('Photo Updated', 'Profile picture uploaded successfully. Tap Save to apply all profile changes.');
             }
         } catch (error) {
             console.error('Error picking image:', error);
-            Alert.alert('Error', 'Failed to pick image');
+            Alert.alert('Error', error?.userMessage || error?.response?.data?.detail || 'Failed to update profile picture');
+        } finally {
+            setUploadingProfilePhoto(false);
         }
     };
 
@@ -111,6 +123,7 @@ const EditProfileScreen = ({ navigation, route }) => {
             // Update local storage
             const userData = await authAPI.getCurrentUser();
             await AsyncStorage.setItem('userData', JSON.stringify(userData));
+            await AsyncStorage.setItem('user_data', JSON.stringify(userData));
 
             Alert.alert('Success', 'Profile updated successfully', [
                 { text: 'OK', onPress: () => navigation.goBack() }
@@ -213,11 +226,16 @@ const EditProfileScreen = ({ navigation, route }) => {
                                         <Icon name="person" size={60} color={colors.textLight} />
                                     </View>
                                 )}
+                                {uploadingProfilePhoto && (
+                                    <View style={styles.profilePhotoLoadingOverlay}>
+                                        <ActivityIndicator size="small" color="#FFFFFF" />
+                                    </View>
+                                )}
                                 <View style={styles.cameraIconContainer}>
                                     <Icon name="camera" size={20} color="#FFFFFF" />
                                 </View>
                             </TouchableOpacity>
-                            <Text style={styles.profilePictureHint}>Tap to change photo</Text>
+                            <Text style={styles.profilePictureHint}>Tap to choose and crop photo</Text>
                         </View>
                     </View>
 
@@ -441,6 +459,17 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 3,
         borderColor: colors.background,
+    },
+    profilePhotoLoadingOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: 60,
+        backgroundColor: 'rgba(0, 0, 0, 0.35)',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     profilePictureHint: {
         ...typography.caption,
