@@ -183,7 +183,7 @@ const MyWorkScreen = ({ navigation }) => {
 
         <View style={styles.logoContainer}>
           <Image
-            source={require('../../Logo_NetZeal.png')}
+            source={require('../../assets/netzeal-app-logo.png')}
             style={styles.logoImage}
             resizeMode="contain"
           />

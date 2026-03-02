@@ -687,7 +687,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
               </TouchableOpacity>
             )}
             <Image
-              source={require('../../Logo_NetZeal.png')}
+              source={require('../../assets/netzeal-app-logo.png')}
               style={styles.headerLogo}
               resizeMode="contain"
             />

@@ -127,7 +127,7 @@ const LoginScreen = ({ navigation }) => {
         >
           <View style={styles.brandRow}>
             <View style={styles.logoWrap}>
-              <Image source={require('../../Logo_NetZeal.png')} style={styles.logo} />
+              <Image source={require('../../assets/netzeal-app-logo.png')} style={styles.logo} />
             </View>
             <View>
               <Text style={styles.brandName}>NetZeal</Text>

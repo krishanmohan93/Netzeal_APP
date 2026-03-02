@@ -4,6 +4,7 @@ User schemas for request and response validation
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict
 from datetime import datetime
+from uuid import UUID
 
 
 class UserBase(BaseModel):
@@ -39,7 +40,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     """Schema for user response"""
     id: int
-    public_id: Optional[str] = None
+    public_id: Optional[UUID] = None
     auth_provider: str
     bio: Optional[str] = None
     profile_photo: Optional[str] = None

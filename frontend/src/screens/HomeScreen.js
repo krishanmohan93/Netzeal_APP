@@ -703,7 +703,7 @@ const HomeScreen = ({ navigation }) => {
         {/* Center logo (absolute to remain perfectly centered) */}
         <View pointerEvents="none" style={styles.centerLogo}>
           <Image
-            source={require('../../Logo_NetZeal.png')}
+            source={require('../../assets/netzeal-app-logo.png')}
             style={styles.logoImage}
             resizeMode="contain"
           />

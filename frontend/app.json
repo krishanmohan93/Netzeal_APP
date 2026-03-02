@@ -7,9 +7,9 @@
     "owner": "krishanmohan",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "icon": "./assets/icon-1024.png",
+    "icon": "./assets/netzeal-app-logo.png",
     "splash": {
-      "image": "./Logo_NetZeal.png",
+      "image": "./assets/netzeal-app-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
     },
@@ -38,7 +38,7 @@
     "android": {
       "backgroundColor": "#FFFFFF",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "foregroundImage": "./assets/netzeal-app-logo.png",
         "backgroundColor": "#FFFFFF"
       },
       "package": "com.netzeal.app",
