@@ -11,3 +11,7 @@ coverage
 *.crdownload
 **/.DS_Store
 **/Thumbs.db
+../backend
+.git
+.env.local
+.env.*.local
