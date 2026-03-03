@@ -189,6 +189,31 @@ async def create_post(
     except Exception as e:
         print(f"Error generating AI metadata: {e}")
 
+    # Index post in Qdrant for semantic search
+    try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise RuntimeError("Embedding service unavailable")
+
+        vectors = embedding_service.embed_post(
+            post_id=new_post.id,
+            caption=post_data.content or "",
+            hashtags=post_data.tags,
+        )
+        payload = {
+            "caption": post_data.content or "",
+            "tags": post_data.tags or [],
+            "media_type": (post_data.content_type.value if post_data.content_type else "post"),
+            "author_username": current_user.username,
+            "created_at": new_post.created_at.isoformat(),
+        }
+        qdrant = get_qdrant_service()
+        if qdrant:
+            qdrant.upsert_post(new_post.id, current_user.id, vectors, payload)
+            print(f"✅ Post indexed in Qdrant: {new_post.id}")
+    except Exception as e:
+        print(f"⚠️ Qdrant indexing failed for post {new_post.id}: {e}")
+
     _enqueue_fanout(new_post.id, current_user.id)
 
     try:
@@ -1468,6 +1493,32 @@ async def publish_post(
     post.published_at = func.now()
     db.commit()
     db.refresh(post)
+
+    # Index post in Qdrant when draft is published
+    try:
+        embedding_service = get_embedding_service()
+        if not embedding_service:
+            raise RuntimeError("Embedding service unavailable")
+
+        vectors = embedding_service.embed_post(
+            post_id=post.id,
+            caption=post.content or "",
+            hashtags=post.tags,
+        )
+        payload = {
+            "caption": post.content or "",
+            "tags": post.tags or [],
+            "media_type": (post.content_type.value if post.content_type else "post"),
+            "author_username": current_user.username,
+            "created_at": post.created_at.isoformat() if post.created_at else datetime.utcnow().isoformat(),
+            "published_at": post.published_at.isoformat() if getattr(post, "published_at", None) else None,
+        }
+        qdrant = get_qdrant_service()
+        if qdrant:
+            qdrant.upsert_post(post.id, current_user.id, vectors, payload)
+            print(f"✅ Post indexed in Qdrant: {post.id}")
+    except Exception as e:
+        print(f"⚠️ Qdrant indexing failed for post {post.id}: {e}")
 
     # Fan-out in background worker
     try:

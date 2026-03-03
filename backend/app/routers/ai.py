@@ -3,6 +3,7 @@ AI assistant and recommendations routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Dict
 
 from ..core.database import get_db
@@ -16,6 +17,8 @@ from ..schemas.ai import (
     UserAnalytics
 )
 from ..services.groq_deepseek_service import AIService
+from ..services.embedding_service import EmbeddingService
+from ..services.qdrant_service import QdrantService
 from ..services.recommendation_service import recommendation_service
 from ..models.social import AIConversation
 from datetime import datetime
@@ -23,6 +26,87 @@ import logging
 
 router = APIRouter(prefix="/ai", tags=["AI & Recommendations"])
 logger = logging.getLogger(__name__)
+
+_embedding_service = None
+_embedding_init_attempted = False
+_qdrant_service = None
+_qdrant_init_attempted = False
+
+
+def _get_embedding_service():
+    global _embedding_service, _embedding_init_attempted
+    if _embedding_service is not None:
+        return _embedding_service
+    if _embedding_init_attempted:
+        return None
+    _embedding_init_attempted = True
+    try:
+        _embedding_service = EmbeddingService()
+        return _embedding_service
+    except Exception as e:
+        logger.warning("Embedding service unavailable for AI RAG: %s", e)
+        return None
+
+
+def _get_qdrant_service():
+    global _qdrant_service, _qdrant_init_attempted
+    if _qdrant_service is not None:
+        return _qdrant_service
+    if _qdrant_init_attempted:
+        return None
+    _qdrant_init_attempted = True
+    try:
+        _qdrant_service = QdrantService()
+        _qdrant_service.init_posts_collection()
+        return _qdrant_service
+    except Exception as e:
+        logger.warning("Qdrant unavailable for AI RAG: %s", e)
+        return None
+
+
+def _build_rag_context(user_message: str, max_items: int = 3) -> str:
+    """Fetch semantically relevant posts from Qdrant and format compact context for the LLM."""
+    if not user_message or not user_message.strip():
+        return ""
+
+    embedding_service = _get_embedding_service()
+    qdrant_service = _get_qdrant_service()
+    if not embedding_service or not qdrant_service:
+        return ""
+
+    try:
+        query_vector = embedding_service.embed_query(user_message)
+        if not query_vector:
+            return ""
+
+        results = qdrant_service.search_posts(query_vector=query_vector, limit=max_items)
+        if not results:
+            return ""
+
+        lines = []
+        for idx, point in enumerate(results[:max_items], start=1):
+            payload = getattr(point, "payload", None) or {}
+            caption = (payload.get("caption") or "").strip()
+            if not caption:
+                continue
+            author = payload.get("author_username") or "unknown"
+            tags = payload.get("tags") or []
+            score = getattr(point, "score", None)
+            tags_text = ", ".join(tags[:5]) if isinstance(tags, list) and tags else ""
+            score_text = f" score={score:.3f}" if isinstance(score, (int, float)) else ""
+            line = f"{idx}. @{author}: {caption}"
+            if tags_text:
+                line += f" | tags: {tags_text}"
+            if score_text:
+                line += f"{score_text}"
+            lines.append(line)
+
+        if not lines:
+            return ""
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning("Failed to build RAG context: %s", e)
+        return ""
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -56,20 +140,29 @@ async def chat_with_ai(
 
 ✨ Response Style: Be concise, encouraging, actionable. Tailor to user's profile."""
 
-    # Get recent conversation history
-    recent_conversations = db.query(AIConversation).filter(
-        AIConversation.user_id == current_user.id
-    ).order_by(AIConversation.created_at.desc()).limit(3).all()
-    
+    # Get recent conversation history (best-effort; AI should keep working even if table is unavailable)
     conversation_context = ""
-    for conv in reversed(recent_conversations):
-        conversation_context += f"User: {conv.message}\nAssistant: {conv.response}\n\n"
+    try:
+        recent_conversations = db.query(AIConversation).filter(
+            AIConversation.user_id == current_user.id
+        ).order_by(AIConversation.created_at.desc()).limit(3).all()
+
+        for conv in reversed(recent_conversations):
+            conversation_context += f"User: {conv.message}\nAssistant: {conv.response}\n\n"
+    except SQLAlchemyError as e:
+        logger.warning("AI conversation history unavailable: %s", e)
     
+    # Build semantic retrieval context (RAG) from Qdrant-indexed posts
+    rag_context = _build_rag_context(message.message)
+
     # Build full prompt with context
     full_prompt = f"""{system_prompt}
 
 Previous conversation:
 {conversation_context if conversation_context else "No previous conversation"}
+
+Relevant platform content (semantic retrieval):
+{rag_context if rag_context else "No relevant platform content found."}
 
 Current message: {message.message}
 
@@ -97,15 +190,19 @@ Respond naturally and helpfully based on the user's profile and conversation his
         )
         intent = "general_inquiry"
     
-    # Save conversation
-    new_conversation = AIConversation(
-        user_id=current_user.id,
-        message=message.message,
-        response=ai_response_text,
-        intent=intent
-    )
-    db.add(new_conversation)
-    db.commit()
+    # Save conversation (best-effort; do not fail chat response if persistence fails)
+    try:
+        new_conversation = AIConversation(
+            user_id=current_user.id,
+            message=message.message,
+            response=ai_response_text,
+            intent=intent
+        )
+        db.add(new_conversation)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.warning("Failed to persist AI conversation: %s", e)
     
     # Generate recommendations based on intent
     recommendations = None
@@ -243,9 +340,13 @@ async def get_conversation_history(
 ):
     """Get AI conversation history"""
     
-    conversations = db.query(AIConversation).filter(
-        AIConversation.user_id == current_user.id
-    ).order_by(AIConversation.created_at.desc()).limit(limit).all()
+    try:
+        conversations = db.query(AIConversation).filter(
+            AIConversation.user_id == current_user.id
+        ).order_by(AIConversation.created_at.desc()).limit(limit).all()
+    except SQLAlchemyError as e:
+        logger.warning("AI conversation history endpoint unavailable: %s", e)
+        return []
     
     return [
         {
