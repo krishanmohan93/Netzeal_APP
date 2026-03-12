@@ -19,16 +19,38 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { aiAPI, collabAPI, socialAPI } from '../services/api';
 import { colors, spacing, typography, borderRadius, shadows } from '../utils/theme';
 
+const extractAssistantText = (payload) => {
+  const candidates = [
+    payload?.response,
+    payload?.reply,
+    payload?.answer,
+    payload?.content,
+    payload?.message,
+  ];
+  const text = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return text || 'I could not generate a response right now. Please try again.';
+};
+
 const MessageBubble = ({ message, isUser }) => {
+  const isStreaming = Boolean(message?.isStreaming);
+
   return (
     <View style={[styles.messageBubble, isUser ? styles.userBubble : styles.aiBubble]}>
-      <Text style={[styles.messageText, isUser && styles.userMessageText]}>
-        {message.content}
-      </Text>
+      {!isUser && <Text style={styles.assistantLabel}>NetZeal AI</Text>}
+      {isStreaming && !message.content ? (
+        <View style={styles.inlineThinkingRow}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.inlineThinkingText}>Thinking...</Text>
+        </View>
+      ) : (
+        <Text style={[styles.messageText, isUser && styles.userMessageText]}>
+          {isStreaming ? `${message.content}|` : message.content}
+        </Text>
+      )}
       <Text style={[styles.messageTime, isUser && styles.userMessageTime]}>
-        {new Date(message.timestamp).toLocaleTimeString([], { 
-          hour: '2-digit', 
-          minute: '2-digit' 
+        {new Date(message.timestamp).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
         })}
       </Text>
     </View>
@@ -52,7 +74,7 @@ const UserRecCard = ({ user, onConnect }) => (
     <Text style={styles.recTitle}>{user.full_name || user.username}</Text>
     <Text style={styles.recPlatform}>@{user.username}</Text>
     {!!(user.skills && user.skills.length) && (
-      <Text style={styles.recReason} numberOfLines={2}>Skills: {user.skills.slice(0,5).join(', ')}</Text>
+      <Text style={styles.recReason} numberOfLines={2}>Skills: {user.skills.slice(0, 5).join(', ')}</Text>
     )}
     {onConnect ? (
       <TouchableOpacity style={[styles.smallBtn, { marginTop: spacing.sm }]} onPress={onConnect}>
@@ -78,16 +100,55 @@ const AIBotScreen = () => {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isAssistantTyping, setIsAssistantTyping] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [assistantError, setAssistantError] = useState('');
   const flatListRef = useRef(null);
+  const isMountedRef = useRef(true);
   const insets = useSafeAreaInsets();
   const [inputBarHeight, setInputBarHeight] = useState(56);
   const [composerInputHeight, setComposerInputHeight] = useState(44);
 
   useEffect(() => {
     initializeAssistant();
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
+
+  const scrollToBottom = (animated = true) => {
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    });
+  };
+
+  const animateAssistantMessage = async (messageId, fullText) => {
+    const safeText = typeof fullText === 'string' ? fullText : '';
+    if (!safeText) {
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === messageId ? { ...msg, isStreaming: false } : msg))
+      );
+      return;
+    }
+
+    const step = safeText.length > 360 ? 10 : safeText.length > 180 ? 6 : 3;
+    for (let i = step; i <= safeText.length; i += step) {
+      if (!isMountedRef.current) return;
+      const partial = safeText.slice(0, i);
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === messageId ? { ...msg, content: partial } : msg))
+      );
+      scrollToBottom(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    if (!isMountedRef.current) return;
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === messageId ? { ...msg, content: safeText, isStreaming: false } : msg
+      )
+    );
+  };
 
   const initializeAssistant = async () => {
     setInitializing(true);
@@ -133,8 +194,8 @@ const AIBotScreen = () => {
       const historyResponse = await aiAPI.getConversationHistory(10);
       const history = Array.isArray(historyResponse) ? historyResponse : [];
       const formattedMessages = [];
-      
-      history.reverse().forEach(conv => {
+
+      history.reverse().forEach((conv) => {
         formattedMessages.push({
           id: `user-${conv.id}`,
           content: conv.message || '...',
@@ -149,7 +210,7 @@ const AIBotScreen = () => {
           recommendations: conv.recommendations,
         });
       });
-      
+
       setMessages(formattedMessages);
       return formattedMessages;
     } catch (error) {
@@ -173,61 +234,57 @@ const AIBotScreen = () => {
       timestamp: new Date().toISOString(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setInputText('');
     setLoading(true);
+    setIsAssistantTyping(true);
+    setAssistantError('');
 
     try {
       const response = await aiAPI.chat(messageToSend);
-      const aiContent =
-        typeof response?.response === 'string' && response.response.trim().length > 0
-          ? response.response
-          : 'I could not generate a response right now. Please try again.';
-      
+      const aiContent = extractAssistantText(response);
+      const aiMessageId = `ai-${Date.now()}`;
+
       const aiMessage = {
-        id: `ai-${Date.now()}`,
-        content: aiContent,
+        id: aiMessageId,
+        content: '',
         isUser: false,
         timestamp: response?.created_at || new Date().toISOString(),
+        isStreaming: true,
         recommendations: Array.isArray(response?.recommendations) ? response.recommendations : [],
         recommendations_content: Array.isArray(response?.recommendations_content) ? response.recommendations_content : [],
         recommendations_users: Array.isArray(response?.recommendations_users) ? response.recommendations_users : [],
         recommendations_opportunities: Array.isArray(response?.recommendations_opportunities) ? response.recommendations_opportunities : [],
       };
-      
-      setMessages(prev => [...prev, aiMessage]);
-      
-      // Scroll to bottom
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+
+      setMessages((prev) => [...prev, aiMessage]);
+      scrollToBottom(true);
+      await animateAssistantMessage(aiMessageId, aiContent);
     } catch (error) {
-      // 401 errors are handled by API interceptor (auto-redirect to login)
-      // Only show error message for other errors
-      if (error.response?.status !== 401) {
-        console.error('Error sending message:', error);
-        
-        let errorText = 'Sorry, I encountered an error. Please try again.';
-        
-        // Provide more specific error messages
-        if (error.response?.status === 500) {
-          errorText = 'The AI service is temporarily unavailable. Please try again in a moment.';
-        } else if (error.code === 'ECONNABORTED' || error.message === 'Network Error') {
-          errorText = 'Network connection issue. Please check your internet and try again.';
-        } else if (error.response?.data?.detail) {
-          errorText = error.response.data.detail;
-        }
-        
-        const errorMessage = {
-          id: `error-${Date.now()}`,
-          content: errorText,
-          isUser: false,
-          timestamp: new Date().toISOString(),
-        };
-        setMessages(prev => [...prev, errorMessage]);
+      console.error('Error sending message:', error);
+
+      let errorText = 'Sorry, I encountered an error. Please try again.';
+
+      if (error.response?.status === 401) {
+        errorText = 'Your session expired. Please login again and continue the chat.';
+      } else if (error.response?.status === 500) {
+        errorText = 'The AI service is temporarily unavailable. Please try again in a moment.';
+      } else if (error.code === 'ECONNABORTED' || error.message === 'Network Error') {
+        errorText = 'Network connection issue. Please check your internet and try again.';
+      } else if (error.response?.data?.detail) {
+        errorText = error.response.data.detail;
       }
+
+      const errorMessage = {
+        id: `error-${Date.now()}`,
+        content: errorText,
+        isUser: false,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setLoading(false);
+      setIsAssistantTyping(false);
     }
   };
 
@@ -288,7 +345,9 @@ const AIBotScreen = () => {
                 onConnect={u?.id ? async () => {
                   try {
                     await socialAPI.followUser(u.id);
-                  } catch (e) { /* noop */ }
+                  } catch (e) {
+                    // noop
+                  }
                 } : undefined}
               />
             ))}
@@ -304,7 +363,9 @@ const AIBotScreen = () => {
                 onApply={op?.author_id ? async () => {
                   try {
                     await collabAPI.apply({ toUserId: op.author_id, topic: op.title, message: 'Hi! I saw this and would like to collaborate/work on it.' });
-                  } catch (e) { /* noop */ }
+                  } catch (e) {
+                    // noop
+                  }
                 } : undefined}
               />
             ))}
@@ -317,140 +378,145 @@ const AIBotScreen = () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-      {messages.length === 0 ? (
-        <ScrollView contentContainerStyle={styles.emptyContainer}>
-          <View style={styles.avatarContainer}>
-            <Icon name="rocket-outline" size={40} color={colors.primary} />
-          </View>
-          <Text style={styles.emptyTitle}>Your AI Tech Mentor 🚀</Text>
-          <Text style={styles.emptyText}>
-            I'm here to help you learn faster, build more, and grow your tech career like a pro!
-          </Text>
+        {messages.length === 0 ? (
+          <ScrollView contentContainerStyle={styles.emptyContainer}>
+            <View style={styles.avatarContainer}>
+              <Icon name="rocket-outline" size={40} color={colors.primary} />
+            </View>
+            <Text style={styles.emptyTitle}>Your AI Tech Mentor 🚀</Text>
+            <Text style={styles.emptyText}>
+              I'm here to help you learn faster, build more, and grow your tech career like a pro!
+            </Text>
 
-          {/* Quick Actions Grid */}
-          <View style={styles.quickActionsGrid}>
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('Create a personalized learning path for me')}
-            >
-              <Icon name="school-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Learning Path</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('Suggest project ideas based on my skills')}
-            >
-              <Icon name="bulb-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Project Ideas</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('What skills should I focus on for career growth?')}
-            >
-              <Icon name="trending-up-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Career Guide</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('Recommend tutorials and resources for my interests')}
-            >
-              <Icon name="book-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Resources</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('Find me coding challenges to practice')}
-            >
-              <Icon name="code-slash-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Challenges</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickActionButton}
-              onPress={() => setInputText('Help me connect with relevant developers')}
-            >
-              <Icon name="people-outline" size={28} color={colors.primary} />
-              <Text style={styles.quickActionLabel}>Network</Text>
-            </TouchableOpacity>
-          </View>
+            <View style={styles.quickActionsGrid}>
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('Create a personalized learning path for me')}
+              >
+                <Icon name="school-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Learning Path</Text>
+              </TouchableOpacity>
 
-          {/* Sample Prompts */}
-          <View style={styles.samplePromptsContainer}>
-            <Text style={styles.samplePromptsTitle}>Or try asking:</Text>
-            <TouchableOpacity
-              style={styles.promptChip}
-              onPress={() => setInputText('What are the trending technologies in 2025?')}
-            >
-              <Text style={styles.promptText}>💡 What's trending in tech?</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.promptChip}
-              onPress={() => setInputText('Review my portfolio and suggest improvements')}
-            >
-              <Text style={styles.promptText}>📈 Review my portfolio</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[
-            styles.messagesList,
-            { paddingBottom: (inputBarHeight || 56) + insets.bottom },
-          ]}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-        />
-      )}
-      
-      {/* Composer anchored to bottom and only this area avoids the keyboard to prevent full-screen jumps */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
-        style={styles.composerContainer}
-      >
-        <View
-          style={[
-            styles.inputContainer,
-            { paddingBottom: insets.bottom > 0 ? insets.bottom : 8 },
-          ]}
-          onLayout={(e) =>
-            setInputBarHeight(Math.max(44, Math.ceil(e.nativeEvent.layout.height)))
-          }
-        >
-          <TextInput
-            style={[styles.input, { height: composerInputHeight }]}
-            placeholder="Ask me anything..."
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            maxLength={500}
-            onFocus={() => setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50)}
-            onContentSizeChange={(e) => {
-              const h = Math.min(140, Math.max(44, Math.ceil(e.nativeEvent.contentSize.height)));
-              setComposerInputHeight(h);
-            }}
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('Suggest project ideas based on my skills')}
+              >
+                <Icon name="bulb-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Project Ideas</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('What skills should I focus on for career growth?')}
+              >
+                <Icon name="trending-up-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Career Guide</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('Recommend tutorials and resources for my interests')}
+              >
+                <Icon name="book-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Resources</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('Find me coding challenges to practice')}
+              >
+                <Icon name="code-slash-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Challenges</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.quickActionButton}
+                onPress={() => setInputText('Help me connect with relevant developers')}
+              >
+                <Icon name="people-outline" size={28} color={colors.primary} />
+                <Text style={styles.quickActionLabel}>Network</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.samplePromptsContainer}>
+              <Text style={styles.samplePromptsTitle}>Or try asking:</Text>
+              <TouchableOpacity
+                style={styles.promptChip}
+                onPress={() => setInputText('What are the trending technologies in 2025?')}
+              >
+                <Text style={styles.promptText}>💡 What's trending in tech?</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.promptChip}
+                onPress={() => setInputText('Review my portfolio and suggest improvements')}
+              >
+                <Text style={styles.promptText}>📈 Review my portfolio</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            renderItem={renderItem}
+            ListFooterComponent={
+              isAssistantTyping ? (
+                <View style={styles.typingWrap}>
+                  <View style={styles.typingBubble}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.typingText}>NetZeal AI is typing...</Text>
+                  </View>
+                </View>
+              ) : null
+            }
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[
+              styles.messagesList,
+              { paddingBottom: (inputBarHeight || 56) + insets.bottom },
+            ]}
+            onContentSizeChange={() => scrollToBottom(true)}
           />
-          <TouchableOpacity
-            style={[styles.sendButton, (!inputText.trim() || loading) && styles.sendButtonDisabled]}
-            onPress={handleSend}
-            disabled={!inputText.trim() || loading}
+        )}
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.composerContainer}
+        >
+          <View
+            style={[
+              styles.inputContainer,
+              { paddingBottom: insets.bottom > 0 ? insets.bottom : 8 },
+            ]}
+            onLayout={(e) => setInputBarHeight(Math.max(44, Math.ceil(e.nativeEvent.layout.height)))}
           >
-            {loading ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Icon name="send" size={20} color="#FFFFFF" />
-            )}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
+            <TextInput
+              style={[styles.input, { height: composerInputHeight }]}
+              placeholder="Ask me anything..."
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+              maxLength={500}
+              onFocus={() => setTimeout(() => scrollToBottom(true), 50)}
+              onContentSizeChange={(e) => {
+                const h = Math.min(140, Math.max(44, Math.ceil(e.nativeEvent.contentSize.height)));
+                setComposerInputHeight(h);
+              }}
+            />
+            <TouchableOpacity
+              style={[styles.sendButton, (!inputText.trim() || loading) && styles.sendButtonDisabled]}
+              onPress={handleSend}
+              disabled={!inputText.trim() || loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Icon name="send" size={20} color="#FFFFFF" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
       </View>
     </SafeAreaView>
   );
@@ -568,6 +634,27 @@ const styles = StyleSheet.create({
   messagesList: {
     padding: spacing.md,
   },
+  typingWrap: {
+    alignSelf: 'flex-start',
+    maxWidth: '80%',
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  typingBubble: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  typingText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+  },
   composerContainer: {
     position: 'absolute',
     left: 0,
@@ -589,6 +676,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  assistantLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    marginBottom: 4,
+    letterSpacing: 0.3,
+  },
+  inlineThinkingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  inlineThinkingText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
   },
   messageText: {
     ...typography.body,
