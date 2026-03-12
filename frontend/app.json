@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/app-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
+      "backgroundColor": "#E3E3E3"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -38,14 +38,14 @@
     "android": {
       "backgroundColor": "#FFFFFF",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/app-icon.png",
-        "backgroundColor": "#FFFFFF"
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#E3E3E3"
       },
       "package": "com.netzeal.app",
       "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/app-icon.png",
       "build": {
         "babel": {
           "include": []

@@ -93,10 +93,21 @@ const AIBotScreen = () => {
     setInitializing(true);
     setAssistantError('');
     try {
-      await Promise.all([loadUserProfile(), loadConversationHistory()]);
+      const [profileResult, historyResult] = await Promise.allSettled([
+        loadUserProfile(),
+        loadConversationHistory(),
+      ]);
+
+      const profileFailed = profileResult.status === 'rejected' && profileResult.reason?.response?.status !== 401;
+      const historyFailed = historyResult.status === 'rejected' && historyResult.reason?.response?.status !== 401;
+
+      // Keep assistant usable even if one init request fails.
+      if (profileFailed && historyFailed) {
+        setAssistantError('AI Assistant loaded with limited data. You can still chat.');
+      }
     } catch (error) {
       if (error?.response?.status !== 401) {
-        setAssistantError('Unable to load AI Assistant right now. Please try again.');
+        setAssistantError('AI Assistant loaded with limited data. You can still chat.');
       }
     } finally {
       setInitializing(false);
@@ -236,7 +247,10 @@ const AIBotScreen = () => {
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centerState}>
           <Text style={styles.stateText}>{assistantError}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={initializeAssistant}>
+          <TouchableOpacity style={styles.retryButton} onPress={() => setAssistantError('')}>
+            <Text style={styles.retryButtonText}>Continue</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.retryButton, { marginTop: 10 }]} onPress={initializeAssistant}>
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>

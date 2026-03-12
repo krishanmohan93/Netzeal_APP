@@ -5,6 +5,7 @@ import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   Animated,
   Easing,
@@ -59,10 +60,11 @@ const SplashScreen = ({ onFinish }) => {
           },
         ]}
       >
-        {/* Logo Text - Medium Size */}
-        <Text style={[styles.logoText, { color: colors.primary }]}>
-          NETZEAL
-        </Text>
+        <Image
+          source={require('../../assets/netzeal-app-logo.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+        />
       </Animated.View>
 
       {/* Tagline */}
@@ -93,11 +95,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     maxWidth: '80%',
   },
-  logoText: {
-    fontSize: 36,
-    fontWeight: '900',
-    letterSpacing: 3,
-    textAlign: 'center',
+  logoImage: {
+    width: 190,
+    height: 190,
   },
   tagline: {
     fontSize: 12,
