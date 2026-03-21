@@ -40,6 +40,8 @@ class RecommendationService:
         
         # Get user's interests and skills
         user_tags = set((user.skills or []) + (user.interests or []))
+        behavior = self.summarize_user_behavior(db, user_id)
+        behavior_topic_tags = set((behavior.get("top_tags") or []) + (behavior.get("top_topics") or []))
         
         # Get posts user has already interacted with
         interacted_post_ids = [
@@ -50,7 +52,7 @@ class RecommendationService:
         ]
         
         # Find posts with matching tags
-        query = db.query(Post).filter(Post.user_id != user_id)
+        query = db.query(Post).filter(Post.author_id != user_id)
         if interacted_post_ids:
             query = query.filter(~Post.id.in_(interacted_post_ids))
         
@@ -66,6 +68,9 @@ class RecommendationService:
             # Tag matching
             score += len(user_tags & post_tags) * 10
             score += len(user_tags & post_topics) * 5
+            # Behavior matching from recent interactions
+            score += len(behavior_topic_tags & post_tags) * 6
+            score += len(behavior_topic_tags & post_topics) * 4
             
             # Engagement boost
             score += (post.likes_count or 0) * 2
@@ -111,6 +116,8 @@ class RecommendationService:
         
         # Get user's interests and skills
         user_tags = set((user.skills or []) + (user.interests or []))
+        behavior = self.summarize_user_behavior(db, user_id)
+        behavior_topic_tags = set((behavior.get("top_tags") or []) + (behavior.get("top_topics") or []))
         
         # Get already following
         following_ids = [user_id] + [
@@ -130,10 +137,11 @@ class RecommendationService:
             
             # Tag matching
             score += len(user_tags & candidate_tags) * 10
+            score += len(behavior_topic_tags & candidate_tags) * 6
             
             # Activity boost (users who post regularly)
             post_count = db.query(func.count(Post.id)).filter(
-                Post.user_id == candidate.id
+                Post.author_id == candidate.id
             ).scalar()
             score += min(post_count or 0, 20)
             
@@ -367,11 +375,17 @@ Format as a simple numbered list."""
             if p.topics:
                 own_topics.update([t.lower() for t in p.topics])
 
+        recent_30d_cutoff = datetime.utcnow() - timedelta(days=30)
+        recent_interactions_count = sum(
+            1 for i in interactions if i.created_at and i.created_at >= recent_30d_cutoff
+        )
+
         return {
             "interaction_mix": dict(type_counts.most_common(5)),
             "top_tags": [t for t, _ in tag_counter.most_common(5)],
             "top_topics": [t for t, _ in topic_counter.most_common(5)],
             "posting_topics": [t for t, _ in own_topics.most_common(5)],
+            "recent_interactions_30d": recent_interactions_count,
         }
     
     def _build_user_profile_text(self, user: User) -> str:

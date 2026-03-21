@@ -20,14 +20,19 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
     
     # NVIDIA Integrate (OpenAI-compatible AI endpoint)
-    NVIDIA_API_KEY: str
+    NVIDIA_API_KEY: Optional[str] = None
     NVIDIA_API_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     NVIDIA_CHAT_MODEL: str = "deepseek-ai/deepseek-r1"
 
     # Legacy AI provider keys (optional, retained for backward compatibility)
     DEEPSEEK_API_KEY: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
+    GROQ_API_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_CHAT_MODEL: str = "llama-3.1-8b-instant"
     OPENROUTER_API_KEY: Optional[str] = None
+    AI_PRIMARY_PROVIDER: str = "groq"  # groq, nvidia, auto
+    AI_MAX_RESPONSE_TOKENS: int = 320
+    AI_REQUEST_TIMEOUT_SECONDS: int = 30
     
     # Qdrant Cloud (Vector Database for Semantic Search)
     QDRANT_URL: str  # Required: Qdrant Cloud cluster URL (e.g., https://xxx.qdrant.io)

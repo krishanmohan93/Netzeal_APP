@@ -8,7 +8,7 @@ from typing import List, Dict
 
 from ..core.database import get_db
 from ..core.security import get_current_user
-from ..models import User
+from ..models import User, Post, UserInteraction
 from ..schemas.ai import (
     ChatMessage,
     ChatResponse,
@@ -109,6 +109,53 @@ def _build_rag_context(user_message: str, max_items: int = 3) -> str:
         return ""
 
 
+def _build_personal_memory_snapshot(db: Session, user_id: int, max_items: int = 6) -> str:
+    """Build compact long-term memory from interactions and authored posts."""
+    lines: list[str] = []
+    try:
+        recent_interactions = (
+            db.query(UserInteraction)
+            .filter(UserInteraction.user_id == user_id, UserInteraction.post_id.isnot(None))
+            .order_by(UserInteraction.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
+        for item in recent_interactions:
+            post = item.post
+            if not post:
+                continue
+            caption = (post.content or "").strip().replace("\n", " ")
+            if len(caption) > 120:
+                caption = caption[:120] + "..."
+            lines.append(
+                f"- {item.interaction_type.value} on post #{post.id}: {caption}"
+            )
+    except SQLAlchemyError as e:
+        logger.warning("Failed to load interaction memory: %s", e)
+
+    try:
+        authored_posts = (
+            db.query(Post)
+            .filter(Post.author_id == user_id)
+            .order_by(Post.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
+        for post in authored_posts:
+            caption = (post.content or "").strip().replace("\n", " ")
+            if len(caption) > 120:
+                caption = caption[:120] + "..."
+            lines.append(
+                f"- authored post #{post.id}: {caption} | likes={post.likes_count or 0}, comments={post.comments_count or 0}"
+            )
+    except SQLAlchemyError as e:
+        logger.warning("Failed to load authored-post memory: %s", e)
+
+    if not lines:
+        return "No reliable memory snapshot available."
+    return "\n".join(lines[: max_items * 2])
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat_with_ai(
     message: ChatMessage,
@@ -116,9 +163,10 @@ async def chat_with_ai(
     db: Session = Depends(get_db)
 ):
     """Chat with AI assistant"""
-    
+
     # Build user context (enriched with behavior summary)
     behavior = recommendation_service.summarize_user_behavior(db, current_user.id)
+    memory_snapshot = _build_personal_memory_snapshot(db, current_user.id)
     user_context = {
         "skills": current_user.skills or [],
         "interests": current_user.interests or [],
@@ -126,26 +174,37 @@ async def chat_with_ai(
         "recent_activity": f"Top topics: {', '.join(behavior.get('top_topics', []))}",
         "behavior": behavior,
     }
-    
+
     # Build system prompt with user context
-    system_prompt = f"""You are NetZeal AI Assistant - an intelligent tech mentor for developers.
+    system_prompt = f"""You are NetZeal AI Assistant, a personalized tech career mentor.
 
-🎯 Your Role: Help developers learn, build, connect, and grow their tech careers.
+Core goals:
+1) Guide user's career progression.
+2) Suggest relevant networking connections (LinkedIn-style).
+3) Suggest realistic projects and skill-building next actions.
 
-👤 Current User Profile:
-- Skills: {', '.join(user_context.get('skills', [])[:5]) if user_context.get('skills') else 'Not specified'}
-- Interests: {', '.join(user_context.get('interests', [])[:5]) if user_context.get('interests') else 'Not specified'}
-- Career Stage: {user_context.get('career_stage', 'Unknown')}
-- Recent Activity: {user_context.get('recent_activity', 'No recent activity')}
+Current user profile:
+- Skills: {', '.join(user_context.get('skills', [])[:8]) if user_context.get('skills') else 'Not specified'}
+- Interests: {', '.join(user_context.get('interests', [])[:8]) if user_context.get('interests') else 'Not specified'}
+- Career stage: {user_context.get('career_stage', 'Unknown')}
+- Recent activity: {user_context.get('recent_activity', 'No recent activity')}
+- Interaction mix: {user_context.get('behavior', {}).get('interaction_mix', {})}
+- Top tags from engagement: {user_context.get('behavior', {}).get('top_tags', [])}
+- Posting topics: {user_context.get('behavior', {}).get('posting_topics', [])}
 
-✨ Response Style: Be concise, encouraging, actionable. Tailor to user's profile."""
+Response style constraints:
+- Keep answer medium length: around 90-150 words.
+- Use short actionable bullets where useful (max 5 bullets).
+- Avoid long essays and avoid repeating generic advice.
+- Always personalize using available profile + behavior + memory context.
+"""
 
     # Get recent conversation history (best-effort; AI should keep working even if table is unavailable)
     conversation_context = ""
     try:
         recent_conversations = db.query(AIConversation).filter(
             AIConversation.user_id == current_user.id
-        ).order_by(AIConversation.created_at.desc()).limit(3).all()
+        ).order_by(AIConversation.created_at.desc()).limit(12).all()
 
         for conv in reversed(recent_conversations):
             conversation_context += f"User: {conv.message}\nAssistant: {conv.response}\n\n"
@@ -161,32 +220,39 @@ async def chat_with_ai(
 Previous conversation:
 {conversation_context if conversation_context else "No previous conversation"}
 
+Long-term memory snapshot from user's platform activity:
+{memory_snapshot}
+
 Relevant platform content (semantic retrieval):
 {rag_context if rag_context else "No relevant platform content found."}
 
 Current message: {message.message}
 
-Respond naturally and helpfully based on the user's profile and conversation history."""
+Return:
+- Personalized guidance
+- Suggested connections direction
+- Suggested project/learning direction
+- Medium-length response only."""
 
     try:
         ai_response_text = await AIService.generate_ai_response(
             prompt=full_prompt,
             mode="free",
-            temperature=0.7,
-            max_tokens=500
+            temperature=0.6,
+            max_tokens=280
         )
-        
+
         # Detect intent from message
         intent = _detect_intent(message.message)
-        
+
     except Exception as e:
         logger.exception("AI chat generation failed: %s", e)
-        
+
         # Fallback graceful response
         ai_response_text = (
-            f"I'm having trouble right now: {str(e)[:100]}. "
+            "I am unable to fetch a full AI response right now. "
             "Please try again in a moment. "
-            "In the meantime, check out the recommendations below!"
+            "I still added personalized recommendations below from your activity."
         )
         intent = "general_inquiry"
     
@@ -204,7 +270,7 @@ Respond naturally and helpfully based on the user's profile and conversation his
         db.rollback()
         logger.warning("Failed to persist AI conversation: %s", e)
     
-    # Generate recommendations based on intent
+    # Generate recommendations based on intent + always-on personalization
     recommendations = None
     rec_content = None
     rec_users = None
@@ -213,13 +279,23 @@ Respond naturally and helpfully based on the user's profile and conversation his
     try:
         if intent == "learning_recommendation":
             courses = await recommendation_service.recommend_courses(db, current_user.id)
-            recommendations = courses[:3] if courses else None
-        if intent in {"general_inquiry", "tech_trends", "debugging_help", "skill_development"}:
-            rec_content = await recommendation_service.recommend_content_for_user(db, current_user.id, limit=6)
-        if intent in {"networking", "career_advice"}:
-            rec_users = await recommendation_service.recommend_users_to_follow(db, current_user.id, limit=6)
-        if intent in {"project_recommendation", "career_advice"}:
-            rec_opportunities = await recommendation_service.recommend_opportunities(db, current_user.id, limit=6)
+            recommendations = courses[:4] if courses else None
+
+        rec_content = await recommendation_service.recommend_content_for_user(
+            db,
+            current_user.id,
+            limit=4 if intent != "general_inquiry" else 6,
+        )
+        rec_users = await recommendation_service.recommend_users_to_follow(
+            db,
+            current_user.id,
+            limit=4 if intent != "career_advice" else 6,
+        )
+        rec_opportunities = await recommendation_service.recommend_opportunities(
+            db,
+            current_user.id,
+            limit=4 if intent != "project_recommendation" else 6,
+        )
     except Exception as e:
         logger.exception("AI recommendation generation failed: %s", e)
     

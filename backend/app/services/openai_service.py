@@ -6,10 +6,12 @@ import logging
 from typing import List, Dict, Optional
 from ..core.config import settings
 
-# Initialize OpenAI-compatible client (NVIDIA Integrate)
+# Initialize OpenAI-compatible client (NVIDIA Integrate preferred, Groq fallback)
+_client_api_key = settings.NVIDIA_API_KEY or settings.GROQ_API_KEY
+_client_base_url = settings.NVIDIA_API_BASE_URL if settings.NVIDIA_API_KEY else settings.GROQ_API_BASE_URL
 client = OpenAI(
-    api_key=settings.NVIDIA_API_KEY,
-    base_url=settings.NVIDIA_API_BASE_URL,
+    api_key=_client_api_key or "disabled",
+    base_url=_client_base_url,
 )
 logger = logging.getLogger(__name__)
 
