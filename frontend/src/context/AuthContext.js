@@ -25,20 +25,38 @@ export const AuthProvider = ({ children }) => {
     return [...new Set([primary, ...fallbacks])];
   };
 
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = API_CONFIG.TIMEOUT || 30000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const fetchAuthWithFallback = async (path, options) => {
     const urls = getAuthUrls(path);
     let lastNetworkError = null;
 
     for (const url of urls) {
       try {
-        const response = await fetch(url, options);
+        const response = await fetchWithTimeout(url, options);
         return response;
       } catch (err) {
         lastNetworkError = err;
       }
     }
 
-    throw new Error(getUserFacingError(lastNetworkError, 'You appear to be offline. Please check your connection.'));
+    throw new Error(
+      getUserFacingError(
+        lastNetworkError,
+        'Network timeout. Please check internet and try again.'
+      )
+    );
   };
 
   const readResponseBody = async (response) => {

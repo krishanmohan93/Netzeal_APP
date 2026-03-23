@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import timedelta, datetime
 import time
+import asyncio
 from typing import Optional
 import hashlib
 import secrets
@@ -68,6 +69,24 @@ if GOOGLE_CLIENT_ID:
     print("✅ Google OAuth configured successfully")
 else:
     print("⚠️  Warning: GOOGLE_CLIENT_ID not set. Google OAuth will not work.")
+
+
+async def _verify_google_id_token(id_token_value: str) -> dict:
+    """Verify Google ID token in a worker thread with strict timeout."""
+    def _verify_sync() -> dict:
+        return id_token.verify_oauth2_token(
+            id_token_value,
+            requests.Request(),
+            None,
+        )
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_verify_sync), timeout=12)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Google token verification timed out"
+        )
 
 
 def _hash_token(raw_token: str) -> str:
@@ -400,11 +419,7 @@ async def google_auth(
     
     try:
         # Verify Google ID token
-        idinfo = id_token.verify_oauth2_token(
-            token_request.id_token,
-            requests.Request(),
-            None
-        )
+        idinfo = await _verify_google_id_token(token_request.id_token)
         
         # Extra validation (defense-in-depth)
         token_aud = idinfo.get("aud")
