@@ -9,7 +9,7 @@ import Constants from 'expo-constants';
 const LOCAL_IP = process.env.EXPO_PUBLIC_LOCAL_IP || '10.181.184.75';
 const API_PORT = '8000';
 const DEFAULT_PRODUCTION_API_BASE_URL = 'https://netzeal-app-1.onrender.com/api/v1';
-const TIMEOUT = 30000; // 30 seconds
+const TIMEOUT = 20000; // 20 seconds
 const GOOGLE_EXPO_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID || null;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || null;
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || null;
@@ -103,8 +103,8 @@ export const API_CONFIG = {
     expoClientId: GOOGLE_EXPO_CLIENT_ID,
     iosClientId: GOOGLE_IOS_CLIENT_ID,
   },
-  RETRY_ATTEMPTS: 1,
-  RETRY_DELAY: 1000
+  RETRY_ATTEMPTS: 2,
+  RETRY_DELAY: 1200
 };
 
 // Legacy export for compatibility

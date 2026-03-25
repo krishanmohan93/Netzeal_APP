@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     AI_PRIMARY_PROVIDER: str = "groq"  # groq, nvidia, auto
     AI_MAX_RESPONSE_TOKENS: int = 320
-    AI_REQUEST_TIMEOUT_SECONDS: int = 30
+    AI_REQUEST_TIMEOUT_SECONDS: int = 18
     
     # Qdrant Cloud (Vector Database for Semantic Search)
     QDRANT_URL: str  # Required: Qdrant Cloud cluster URL (e.g., https://xxx.qdrant.io)

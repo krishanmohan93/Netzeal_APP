@@ -3,6 +3,7 @@ Uses redis asyncio client if REDIS_URL is provided; otherwise, functions are no-
 """
 import json
 from typing import Optional
+import logging
 
 from ..core.config import settings
 
@@ -12,6 +13,7 @@ except Exception:  # pragma: no cover
     redis = None  # fallback
 
 _redis = None
+logger = logging.getLogger(__name__)
 
 async def get_client():
     global _redis
@@ -38,7 +40,11 @@ async def get_cached_json(key: str):
     client = await get_client()
     if not client:
         return None
-    value = await client.get(key)
+    try:
+        value = await client.get(key)
+    except Exception as e:
+        logger.warning("Redis get failed for key %s: %s", key, e)
+        return None
     if not value:
         return None
     try:
@@ -51,7 +57,10 @@ async def set_cached_json(key: str, value, ttl_seconds: int):
     client = await get_client()
     if not client:
         return
-    await client.set(key, json.dumps(value, default=str), ex=max(1, ttl_seconds))
+    try:
+        await client.set(key, json.dumps(value, default=str), ex=max(1, ttl_seconds))
+    except Exception as e:
+        logger.warning("Redis set failed for key %s: %s", key, e)
 
 
 async def get_cache(key: str):
@@ -70,7 +79,10 @@ async def invalidate_profile_cache(user_ids: list[int]):
         return
     keys = [profile_cache_key(uid) for uid in user_ids if uid]
     if keys:
-        await client.delete(*keys)
+        try:
+            await client.delete(*keys)
+        except Exception as e:
+            logger.warning("Redis delete profile keys failed: %s", e)
 
 
 async def invalidate_all_feeds(user_ids: Optional[list[int]] = None):
@@ -83,20 +95,34 @@ async def invalidate_all_feeds(user_ids: Optional[list[int]] = None):
         for uid in user_ids:
             cursor = "0"
             while True:
-                cursor, keys = await client.scan(cursor=cursor, match=f"feed:{uid}:*", count=200)
+                try:
+                    cursor, keys = await client.scan(cursor=cursor, match=f"feed:{uid}:*", count=200)
+                except Exception as e:
+                    logger.warning("Redis scan failed while invalidating feed cache: %s", e)
+                    break
                 keys_to_delete.extend(keys)
                 if cursor == "0":
                     break
         if keys_to_delete:
-            await client.delete(*keys_to_delete)
+            try:
+                await client.delete(*keys_to_delete)
+            except Exception as e:
+                logger.warning("Redis delete feed keys failed: %s", e)
     else:
         # Delete all feed:* keys (may be heavy in production; for now simple scan)
         cursor = "0"
         keys_to_delete = []
         while True:
-            cursor, keys = await client.scan(cursor=cursor, match="feed:*", count=1000)
+            try:
+                cursor, keys = await client.scan(cursor=cursor, match="feed:*", count=1000)
+            except Exception as e:
+                logger.warning("Redis global feed scan failed: %s", e)
+                break
             keys_to_delete.extend(keys)
             if cursor == "0":
                 break
         if keys_to_delete:
-            await client.delete(*keys_to_delete)
+            try:
+                await client.delete(*keys_to_delete)
+            except Exception as e:
+                logger.warning("Redis global feed delete failed: %s", e)

@@ -726,7 +726,10 @@ async def get_current_user_profile(
     Get current authenticated user's profile with statistics
     """
     
-    cached = await get_cached_json(profile_cache_key(current_user.id))
+    try:
+        cached = await get_cached_json(profile_cache_key(current_user.id))
+    except Exception:
+        cached = None
     if cached is not None:
         return cached
 
@@ -762,11 +765,14 @@ async def get_current_user_profile(
         "posts_count": posts_count,
     }
 
-    await set_cached_json(
-        profile_cache_key(current_user.id),
-        profile_payload,
-        settings.PROFILE_CACHE_TTL_SECONDS,
-    )
+    try:
+        await set_cached_json(
+            profile_cache_key(current_user.id),
+            profile_payload,
+            settings.PROFILE_CACHE_TTL_SECONDS,
+        )
+    except Exception:
+        pass
 
     return profile_payload
 

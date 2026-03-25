@@ -105,6 +105,9 @@ const AIBotScreen = () => {
   const [assistantError, setAssistantError] = useState('');
   const flatListRef = useRef(null);
   const isMountedRef = useRef(true);
+  const userNearBottomRef = useRef(true);
+  const forceAutoScrollRef = useRef(false);
+  const isAutoScrollingRef = useRef(false);
   const insets = useSafeAreaInsets();
   const [inputBarHeight, setInputBarHeight] = useState(56);
   const [composerInputHeight, setComposerInputHeight] = useState(44);
@@ -117,9 +120,30 @@ const AIBotScreen = () => {
   }, []);
 
   const scrollToBottom = (animated = true) => {
+    isAutoScrollingRef.current = true;
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToEnd({ animated });
     });
+    setTimeout(() => {
+      isAutoScrollingRef.current = false;
+    }, 120);
+  };
+
+  const handleContentSizeChange = () => {
+    if (forceAutoScrollRef.current || userNearBottomRef.current) {
+      scrollToBottom(true);
+      forceAutoScrollRef.current = false;
+    }
+  };
+
+  const handleListScroll = (event) => {
+    if (isAutoScrollingRef.current) {
+      return;
+    }
+
+    const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    userNearBottomRef.current = distanceFromBottom <= 80;
   };
 
   const animateAssistantMessage = async (messageId, fullText) => {
@@ -138,7 +162,9 @@ const AIBotScreen = () => {
       setMessages((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, content: partial } : msg))
       );
-      scrollToBottom(false);
+      if (userNearBottomRef.current) {
+        scrollToBottom(false);
+      }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
 
@@ -235,6 +261,8 @@ const AIBotScreen = () => {
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    forceAutoScrollRef.current = true;
+    scrollToBottom(true);
     setInputText('');
     setLoading(true);
     setIsAssistantTyping(true);
@@ -258,6 +286,7 @@ const AIBotScreen = () => {
       };
 
       setMessages((prev) => [...prev, aiMessage]);
+      forceAutoScrollRef.current = true;
       scrollToBottom(true);
       await animateAssistantMessage(aiMessageId, aiContent);
     } catch (error) {
@@ -282,6 +311,9 @@ const AIBotScreen = () => {
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMessage]);
+      if (userNearBottomRef.current) {
+        forceAutoScrollRef.current = true;
+      }
     } finally {
       setLoading(false);
       setIsAssistantTyping(false);
@@ -475,7 +507,9 @@ const AIBotScreen = () => {
               styles.messagesList,
               { paddingBottom: (inputBarHeight || 56) + insets.bottom },
             ]}
-            onContentSizeChange={() => scrollToBottom(true)}
+            onContentSizeChange={handleContentSizeChange}
+            onScroll={handleListScroll}
+            scrollEventThrottle={100}
           />
         )}
 
@@ -498,7 +532,10 @@ const AIBotScreen = () => {
               onChangeText={setInputText}
               multiline
               maxLength={500}
-              onFocus={() => setTimeout(() => scrollToBottom(true), 50)}
+              onFocus={() => {
+                forceAutoScrollRef.current = true;
+                setTimeout(() => scrollToBottom(true), 50);
+              }}
               onContentSizeChange={(e) => {
                 const h = Math.min(140, Math.max(44, Math.ceil(e.nativeEvent.contentSize.height)));
                 setComposerInputHeight(h);

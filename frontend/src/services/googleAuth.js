@@ -1,12 +1,29 @@
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { API_CONFIG } from '../config/environment';
 
 let isConfigured = false;
+
+const loadGoogleModule = () => {
+  try {
+    return require('@react-native-google-signin/google-signin');
+  } catch (error) {
+    return null;
+  }
+};
 
 export const configureGoogleSignIn = () => {
   if (isConfigured) {
     return { success: true };
   }
+
+  const googleModule = loadGoogleModule();
+  if (!googleModule?.GoogleSignin) {
+    return {
+      success: false,
+      error: 'Google native module unavailable. Use a development build (expo run:android) instead of Expo Go.',
+    };
+  }
+
+  const GoogleSignin = googleModule.GoogleSignin;
 
   const { webClientId, androidClientId, expoClientId, iosClientId } = API_CONFIG.GOOGLE_CLIENT_IDS;
 
@@ -39,6 +56,15 @@ export const configureGoogleSignIn = () => {
 };
 
 export const signInWithGoogle = async () => {
+  const googleModule = loadGoogleModule();
+  if (!googleModule?.GoogleSignin) {
+    return {
+      success: false,
+      error: 'Google Sign-In requires a development build. Expo Go does not include this native module.',
+    };
+  }
+
+  const { GoogleSignin, statusCodes } = googleModule;
   const configured = configureGoogleSignIn();
   if (!configured.success) {
     return { success: false, error: configured.error };

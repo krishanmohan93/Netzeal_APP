@@ -5,10 +5,9 @@
 
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
 import { Linking } from 'react-native';
 import { API_CONFIG } from '../config/environment';
-import { setAuthToken, clearAuthTokens } from '../services/api';
+import { setAuthToken, clearAuthTokens, getAuthToken, getRefreshToken } from '../services/api';
 import { getUserFacingError } from '../utils/errorMessages';
 
 const AuthContext = createContext({});
@@ -117,10 +116,7 @@ export const AuthProvider = ({ children }) => {
         }
 
         const userData = data.user || data;
-        await AsyncStorage.setItem('user_data', JSON.stringify(userData));
-        setTokens({ access: accessToken, refresh: refreshToken || null });
-        setUser(userData);
-        setError(null);
+        await saveSession(accessToken, refreshToken || null, userData);
       } catch (err) {
         await clearSession();
         setError(getUserFacingError(err, 'Could not complete sign-in. Please try again.'));
@@ -143,17 +139,18 @@ export const AuthProvider = ({ children }) => {
   const bootstrapAsync = async () => {
     try {
       // Try to restore session from storage
-      const savedAccessToken = await SecureStore.getItemAsync('access_token');
-      const savedRefreshToken = await SecureStore.getItemAsync('refresh_token');
+      const savedAccessToken = await getAuthToken();
+      const savedRefreshToken = await getRefreshToken();
       const savedUser = await AsyncStorage.getItem('user_data');
 
       if (savedAccessToken && savedUser) {
         await setAuthToken(savedAccessToken, savedRefreshToken);
-        setTokens({
-          access: savedAccessToken,
-          refresh: savedRefreshToken,
-        });
-        setUser(JSON.parse(savedUser));
+        const parsedUser = JSON.parse(savedUser);
+        setTokens({ access: savedAccessToken, refresh: savedRefreshToken });
+        setUser(parsedUser);
+      } else if (savedAccessToken) {
+        // Keep user signed-in in-memory even if profile cache was cleared.
+        setTokens({ access: savedAccessToken, refresh: savedRefreshToken });
       }
     } catch (error) {
       setError(getUserFacingError(error, 'Unable to restore your session.'));
@@ -164,16 +161,26 @@ export const AuthProvider = ({ children }) => {
 
   // Save tokens and user to secure storage
   const saveSession = async (accessToken, refreshToken, userData) => {
+    let persistenceError = null;
+
     try {
       await setAuthToken(accessToken, refreshToken);
-      await AsyncStorage.setItem('user_data', JSON.stringify(userData));
+      try {
+        await AsyncStorage.setItem('user_data', JSON.stringify(userData));
+      } catch (storageError) {
+        persistenceError = storageError;
+      }
 
       setTokens({
         access: accessToken,
         refresh: refreshToken,
       });
       setUser(userData);
-      setError(null);
+      setError(
+        persistenceError
+          ? 'Signed in, but local cache failed. App may ask you to login again after restart.'
+          : null
+      );
     } catch (error) {
       setError(getUserFacingError(error, 'Could not save your session. Please try again.'));
       throw error;

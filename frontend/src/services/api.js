@@ -65,6 +65,24 @@ const safeAsyncGet = async (key) => {
   }
 };
 
+const safeAsyncSet = async (key, value) => {
+  try {
+    await AsyncStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+const safeAsyncMultiRemove = async (keys) => {
+  try {
+    await AsyncStorage.multiRemove(keys);
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 const readFirstAsyncStorage = async (keys) => {
   for (const key of keys) {
     const value = await safeAsyncGet(key);
@@ -83,22 +101,22 @@ export const setAuthToken = async (token, refresh) => {
   if (token) {
     sessionExpiredShown = false;
     await safeSecureSet(ACCESS_TOKEN_KEY, token);
-    await AsyncStorage.setItem(ACCESS_TOKEN_KEY, token);
-    await AsyncStorage.setItem('token', token);
-    await AsyncStorage.setItem('accessToken', token);
+    await safeAsyncSet(ACCESS_TOKEN_KEY, token);
+    await safeAsyncSet('token', token);
+    await safeAsyncSet('accessToken', token);
   } else {
     await safeSecureDelete(ACCESS_TOKEN_KEY);
-    await AsyncStorage.multiRemove([ACCESS_TOKEN_KEY, 'token', 'accessToken']);
+    await safeAsyncMultiRemove([ACCESS_TOKEN_KEY, 'token', 'accessToken']);
   }
 
   if (typeof refresh !== 'undefined') {
     if (refresh) {
       await safeSecureSet(REFRESH_TOKEN_KEY, refresh);
-      await AsyncStorage.setItem(REFRESH_TOKEN_KEY, refresh);
-      await AsyncStorage.setItem('refreshToken', refresh);
+      await safeAsyncSet(REFRESH_TOKEN_KEY, refresh);
+      await safeAsyncSet('refreshToken', refresh);
     } else {
       await safeSecureDelete(REFRESH_TOKEN_KEY);
-      await AsyncStorage.multiRemove([REFRESH_TOKEN_KEY, 'refreshToken']);
+      await safeAsyncMultiRemove([REFRESH_TOKEN_KEY, 'refreshToken']);
     }
   }
 };
@@ -126,7 +144,7 @@ export const clearAuthTokens = async () => {
   refreshToken = null;
   await safeSecureDelete(ACCESS_TOKEN_KEY);
   await safeSecureDelete(REFRESH_TOKEN_KEY);
-  await AsyncStorage.multiRemove([
+  await safeAsyncMultiRemove([
     ACCESS_TOKEN_KEY,
     REFRESH_TOKEN_KEY,
     'token',
@@ -578,8 +596,30 @@ export const contentAPI = {
 // AI API
 export const aiAPI = {
   chat: async (message) => {
-    const response = await api.post('/ai/chat', { message });
-    return response.data;
+    const maxAttempts = 3;
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await api.post('/ai/chat', { message });
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        const status = error?.response?.status;
+        const isTimeout = error?.code === 'ECONNABORTED';
+        const isTransientServer = status === 429 || status === 502 || status === 503 || status === 504;
+        const isNetwork = !error?.response;
+
+        if (attempt === maxAttempts || !(isTimeout || isTransientServer || isNetwork)) {
+          throw error;
+        }
+
+        const backoffMs = Math.min(2000, 500 * (2 ** (attempt - 1)));
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw lastError;
   },
 
   getContentRecommendations: async (limit = 10) => {

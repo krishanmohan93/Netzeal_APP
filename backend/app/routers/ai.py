@@ -1,6 +1,7 @@
 """
 AI assistant and recommendations routes
 """
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -165,7 +166,17 @@ async def chat_with_ai(
     """Chat with AI assistant"""
 
     # Build user context (enriched with behavior summary)
-    behavior = recommendation_service.summarize_user_behavior(db, current_user.id)
+    try:
+        behavior = recommendation_service.summarize_user_behavior(db, current_user.id)
+    except Exception as e:
+        logger.warning("Behavior summary unavailable for user %s: %s", current_user.id, e)
+        behavior = {
+            "interaction_mix": {},
+            "top_tags": [],
+            "top_topics": [],
+            "posting_topics": [],
+            "recent_interactions_30d": 0,
+        }
     memory_snapshot = _build_personal_memory_snapshot(db, current_user.id)
     user_context = {
         "skills": current_user.skills or [],
@@ -276,25 +287,47 @@ Return:
     rec_users = None
     rec_opportunities = None
 
+    async def _safe_with_timeout(coro, timeout_seconds: float, fallback_value):
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout_seconds)
+        except Exception:
+            return fallback_value
+
     try:
         if intent == "learning_recommendation":
-            courses = await recommendation_service.recommend_courses(db, current_user.id)
+            courses = await _safe_with_timeout(
+                recommendation_service.recommend_courses(db, current_user.id),
+                timeout_seconds=6.0,
+                fallback_value=[],
+            )
             recommendations = courses[:4] if courses else None
 
-        rec_content = await recommendation_service.recommend_content_for_user(
-            db,
-            current_user.id,
-            limit=4 if intent != "general_inquiry" else 6,
+        rec_content = await _safe_with_timeout(
+            recommendation_service.recommend_content_for_user(
+                db,
+                current_user.id,
+                limit=4 if intent != "general_inquiry" else 6,
+            ),
+            timeout_seconds=6.0,
+            fallback_value=None,
         )
-        rec_users = await recommendation_service.recommend_users_to_follow(
-            db,
-            current_user.id,
-            limit=4 if intent != "career_advice" else 6,
+        rec_users = await _safe_with_timeout(
+            recommendation_service.recommend_users_to_follow(
+                db,
+                current_user.id,
+                limit=4 if intent != "career_advice" else 6,
+            ),
+            timeout_seconds=6.0,
+            fallback_value=None,
         )
-        rec_opportunities = await recommendation_service.recommend_opportunities(
-            db,
-            current_user.id,
-            limit=4 if intent != "project_recommendation" else 6,
+        rec_opportunities = await _safe_with_timeout(
+            recommendation_service.recommend_opportunities(
+                db,
+                current_user.id,
+                limit=4 if intent != "project_recommendation" else 6,
+            ),
+            timeout_seconds=6.0,
+            fallback_value=None,
         )
     except Exception as e:
         logger.exception("AI recommendation generation failed: %s", e)

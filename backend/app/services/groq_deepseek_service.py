@@ -1,6 +1,7 @@
 """
 Unified AI provider service with production-safe fallback behavior.
 """
+import asyncio
 import logging
 from typing import Literal, Optional
 
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 class AIService:
     """Unified AI service with Groq-first fallback and medium-length defaults."""
+
+    RETRY_ATTEMPTS = 3
 
     @staticmethod
     def _provider_order() -> list[str]:
@@ -102,31 +105,49 @@ class AIService:
             if not api_key or not base_url or not model:
                 provider_errors.append(f"{provider}: missing configuration")
                 continue
-            try:
-                response_text = await AIService._call_openai_compatible_chat(
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=bounded_max_tokens,
-                )
-                if response_text:
-                    return AIService._enforce_medium_length(response_text)
-                provider_errors.append(f"{provider}: empty response")
-            except httpx.HTTPStatusError as e:
-                status_code = e.response.status_code
-                provider_errors.append(f"{provider}: http_{status_code}")
-                logger.warning("AI provider %s HTTP error %s", provider, status_code)
-                continue
-            except httpx.TimeoutException:
-                provider_errors.append(f"{provider}: timeout")
-                logger.warning("AI provider %s timeout", provider)
-                continue
-            except Exception as e:
-                provider_errors.append(f"{provider}: unexpected_error")
-                logger.exception("AI provider %s failure: %s", provider, e)
-                continue
+            for attempt in range(1, AIService.RETRY_ATTEMPTS + 1):
+                try:
+                    response_text = await AIService._call_openai_compatible_chat(
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=bounded_max_tokens,
+                    )
+                    if response_text:
+                        return AIService._enforce_medium_length(response_text)
+                    provider_errors.append(f"{provider}: empty_response_attempt_{attempt}")
+                except httpx.HTTPStatusError as e:
+                    status_code = e.response.status_code
+                    retryable = status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+                    provider_errors.append(f"{provider}: http_{status_code}_attempt_{attempt}")
+                    logger.warning(
+                        "AI provider %s HTTP error %s (attempt %s/%s)",
+                        provider,
+                        status_code,
+                        attempt,
+                        AIService.RETRY_ATTEMPTS,
+                    )
+                    if not retryable or attempt == AIService.RETRY_ATTEMPTS:
+                        break
+                except (httpx.TimeoutException, httpx.NetworkError):
+                    provider_errors.append(f"{provider}: network_timeout_attempt_{attempt}")
+                    logger.warning(
+                        "AI provider %s timeout/network error (attempt %s/%s)",
+                        provider,
+                        attempt,
+                        AIService.RETRY_ATTEMPTS,
+                    )
+                    if attempt == AIService.RETRY_ATTEMPTS:
+                        break
+                except Exception as e:
+                    provider_errors.append(f"{provider}: unexpected_error_attempt_{attempt}")
+                    logger.exception("AI provider %s failure: %s", provider, e)
+                    break
+
+                backoff_seconds = min(2.0, 0.4 * (2 ** (attempt - 1)))
+                await asyncio.sleep(backoff_seconds)
 
         logger.error("All AI providers failed: %s", "; ".join(provider_errors))
         raise ValueError("AI service temporarily unavailable.")

@@ -7,11 +7,20 @@ from sqlalchemy import func, desc
 from ..models import User, Post, UserInteraction, Follow, InteractionType
 from .groq_deepseek_service import AIService
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import Counter
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _as_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize datetime values from DB before doing age comparisons."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 class RecommendationService:
@@ -377,7 +386,9 @@ Format as a simple numbered list."""
 
         recent_30d_cutoff = datetime.utcnow() - timedelta(days=30)
         recent_interactions_count = sum(
-            1 for i in interactions if i.created_at and i.created_at >= recent_30d_cutoff
+            1
+            for i in interactions
+            if _as_utc_naive(i.created_at) and _as_utc_naive(i.created_at) >= recent_30d_cutoff
         )
 
         return {
