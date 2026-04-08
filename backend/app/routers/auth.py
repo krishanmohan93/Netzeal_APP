@@ -34,6 +34,7 @@ from ..utils.redis_cache import get_cached_json, set_cached_json, profile_cache_
 from ..models.user import User
 from ..models.content import Post
 from ..models.social import Follow
+from ..models.connection import Connection
 from ..schemas.user import (
     UserCreate,
     UserLogin,
@@ -151,6 +152,61 @@ def _send_password_reset_email(user: User, raw_token: str) -> None:
         expiry_minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES,
     )
     send_auth_email(user.email, "Reset your NetZeal password", html)
+
+
+def _public_ids_to_user_ids(db: Session, public_ids: set) -> set[int]:
+    if not public_ids:
+        return set()
+    return {
+        row[0]
+        for row in db.query(User.id).filter(User.public_id.in_(list(public_ids))).all()
+        if row and row[0]
+    }
+
+
+def _collect_followers_ids(db: Session, user: User) -> set[int]:
+    follower_ids = {
+        row[0]
+        for row in db.query(Follow.follower_id).filter(Follow.following_id == user.id).all()
+        if row and row[0]
+    }
+    if user.public_id:
+        follower_public_ids = {
+            row[0]
+            for row in db.query(Connection.follower_id).filter(
+                Connection.following_id == user.public_id,
+                Connection.status == "connected",
+            ).all()
+            if row and row[0]
+        }
+        follower_ids.update(_public_ids_to_user_ids(db, follower_public_ids))
+    return follower_ids
+
+
+def _collect_following_ids(db: Session, user: User) -> set[int]:
+    following_ids = {
+        row[0]
+        for row in db.query(Follow.following_id).filter(Follow.follower_id == user.id).all()
+        if row and row[0]
+    }
+    if user.public_id:
+        following_public_ids = {
+            row[0]
+            for row in db.query(Connection.following_id).filter(
+                Connection.follower_id == user.public_id,
+                Connection.status == "connected",
+            ).all()
+            if row and row[0]
+        }
+        following_ids.update(_public_ids_to_user_ids(db, following_public_ids))
+    return following_ids
+
+
+def _build_profile_counts(db: Session, user: User) -> tuple[int, int, int]:
+    followers_count = len(_collect_followers_ids(db, user))
+    following_count = len(_collect_following_ids(db, user))
+    posts_count = db.query(func.count(Post.id)).filter(Post.author_id == user.id).scalar() or 0
+    return followers_count, following_count, posts_count
 
 
 # ==================== EMAIL + PASSWORD AUTHENTICATION ====================
@@ -733,15 +789,7 @@ async def get_current_user_profile(
     if cached is not None:
         return cached
 
-    counts_row = db.query(
-        db.query(func.count(Follow.id)).filter(Follow.following_id == current_user.id).scalar_subquery().label("followers_count"),
-        db.query(func.count(Follow.id)).filter(Follow.follower_id == current_user.id).scalar_subquery().label("following_count"),
-        db.query(func.count(Post.id)).filter(Post.author_id == current_user.id).scalar_subquery().label("posts_count"),
-    ).first()
-
-    followers_count = counts_row.followers_count or 0
-    following_count = counts_row.following_count or 0
-    posts_count = counts_row.posts_count or 0
+    followers_count, following_count, posts_count = _build_profile_counts(db, current_user)
     
     profile_payload = {
         "id": current_user.id,
@@ -942,23 +990,14 @@ async def get_user_profile(
     if cached is not None:
         return cached
 
-    row = db.query(
-        User,
-        db.query(func.count(Follow.id)).filter(Follow.following_id == User.id).correlate(User).scalar_subquery().label("followers_count"),
-        db.query(func.count(Follow.id)).filter(Follow.follower_id == User.id).correlate(User).scalar_subquery().label("following_count"),
-        db.query(func.count(Post.id)).filter(Post.author_id == User.id).correlate(User).scalar_subquery().label("posts_count"),
-    ).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_id).first()
 
-    if not row:
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
-    user = row[0]
-    followers_count = row.followers_count or 0
-    following_count = row.following_count or 0
-    posts_count = row.posts_count or 0
+    followers_count, following_count, posts_count = _build_profile_counts(db, user)
     
     profile_payload = {
         "id": user.id,

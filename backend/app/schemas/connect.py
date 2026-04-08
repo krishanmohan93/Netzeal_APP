@@ -14,10 +14,13 @@ class ConnectionStatus(str, Enum):
 
 
 class SearchUserResponse(BaseModel):
+    id: Optional[int] = None
     public_id: UUID
     username: str
     full_name: Optional[str] = None
     profile_photo: Optional[str] = None
+    is_following: bool = False
+    followers_count: int = 0
 
     class Config:
         from_attributes = True

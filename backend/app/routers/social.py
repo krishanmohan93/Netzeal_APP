@@ -12,10 +12,12 @@ from ..core.security import get_current_user
 from ..core.rate_limit import engagement_rate_limit
 from ..core.feature_gates import require_semantic_features_enabled
 from ..utils.redis_cache import invalidate_profile_cache
-from ..models import User, Follow, Post
+from ..models import User, Follow, Post, Connection
 from ..schemas.user import UserResponse
 from ..services.embedding_service import EmbeddingService
 from ..services.qdrant_service import QdrantService
+from ..services.notification_service import create_notification
+from ..services.recommendation_service import recommendation_service
 
 router = APIRouter(prefix="/social", tags=["Social Networking"])
 
@@ -66,6 +68,74 @@ def get_qdrant_service():
         return None
 
 
+def _connection_followers_ids(db: Session, target: User) -> set[int]:
+    if not target.public_id:
+        return set()
+    follower_public_ids = {
+        row[0]
+        for row in db.query(Connection.follower_id).filter(
+            Connection.following_id == target.public_id,
+            Connection.status == "connected",
+        ).all()
+        if row and row[0]
+    }
+    if not follower_public_ids:
+        return set()
+    return {
+        row[0]
+        for row in db.query(User.id).filter(User.public_id.in_(follower_public_ids)).all()
+        if row and row[0]
+    }
+
+
+def _connection_following_ids(db: Session, source: User) -> set[int]:
+    if not source.public_id:
+        return set()
+    following_public_ids = {
+        row[0]
+        for row in db.query(Connection.following_id).filter(
+            Connection.follower_id == source.public_id,
+            Connection.status == "connected",
+        ).all()
+        if row and row[0]
+    }
+    if not following_public_ids:
+        return set()
+    return {
+        row[0]
+        for row in db.query(User.id).filter(User.public_id.in_(following_public_ids)).all()
+        if row and row[0]
+    }
+
+
+def _ensure_connection_sync(db: Session, follower: User, following: User) -> None:
+    if not follower.public_id or not following.public_id:
+        return
+    existing_connection = db.query(Connection).filter(
+        Connection.follower_id == follower.public_id,
+        Connection.following_id == following.public_id,
+    ).first()
+    if not existing_connection:
+        db.add(
+            Connection(
+                follower_id=follower.public_id,
+                following_id=following.public_id,
+                status="connected",
+            )
+        )
+
+
+def _remove_connection_sync(db: Session, follower: User, following: User) -> None:
+    if not follower.public_id or not following.public_id:
+        return
+    existing_connection = db.query(Connection).filter(
+        Connection.follower_id == follower.public_id,
+        Connection.following_id == following.public_id,
+    ).first()
+    if existing_connection:
+        db.delete(existing_connection)
+
+
 @router.post("/follow/{user_id}")
 async def follow_user(
     user_id: int,
@@ -97,6 +167,10 @@ async def follow_user(
     ).first()
     
     if existing_follow:
+        # Keep UUID graph in sync for feed/profile/chat-v2 paths.
+        _ensure_connection_sync(db, current_user, user_to_follow)
+        db.commit()
+        await invalidate_profile_cache([current_user.id, user_id])
         return {"message": f"Successfully followed {user_to_follow.username}"}
     
     # Create follow relationship
@@ -106,10 +180,20 @@ async def follow_user(
     )
     
     db.add(new_follow)
+    _ensure_connection_sync(db, current_user, user_to_follow)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
+    else:
+        await create_notification(
+            db=db,
+            recipient_id=user_to_follow.id,
+            sender_id=current_user.id,
+            type="follow",
+            text=f"{current_user.username} followed you",
+            entity_id=current_user.id,
+        )
 
     await invalidate_profile_cache([current_user.id, user_id])
     
@@ -125,15 +209,22 @@ async def unfollow_user(
 ):
     """Unfollow a user"""
     
+    user_to_unfollow = db.query(User).filter(User.id == user_id).first()
+    if not user_to_unfollow:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
     follow = db.query(Follow).filter(
         Follow.follower_id == current_user.id,
         Follow.following_id == user_id
     ).first()
     
-    if not follow:
-        return {"message": "Successfully unfollowed user"}
-    
-    db.delete(follow)
+    if follow:
+        db.delete(follow)
+
+    _remove_connection_sync(db, current_user, user_to_unfollow)
     db.commit()
 
     await invalidate_profile_cache([current_user.id, user_id])
@@ -150,12 +241,25 @@ async def get_followers(
 ):
     """Get list of users following the current user"""
     
-    follows = db.query(Follow).filter(
-        Follow.following_id == current_user.id
-    ).offset(skip).limit(limit).all()
-    
-    follower_ids = [f.follower_id for f in follows]
-    followers = db.query(User).filter(User.id.in_(follower_ids)).all()
+    follower_ids = {
+        row[0]
+        for row in db.query(Follow.follower_id).filter(
+            Follow.following_id == current_user.id
+        ).all()
+        if row and row[0]
+    }
+    follower_ids.update(_connection_followers_ids(db, current_user))
+
+    if not follower_ids:
+        return []
+
+    followers = (
+        db.query(User)
+        .filter(User.id.in_(list(follower_ids)))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     
     return followers
 
@@ -169,12 +273,25 @@ async def get_following(
 ):
     """Get list of users the current user is following"""
     
-    follows = db.query(Follow).filter(
-        Follow.follower_id == current_user.id
-    ).offset(skip).limit(limit).all()
-    
-    following_ids = [f.following_id for f in follows]
-    following = db.query(User).filter(User.id.in_(following_ids)).all()
+    following_ids = {
+        row[0]
+        for row in db.query(Follow.following_id).filter(
+            Follow.follower_id == current_user.id
+        ).all()
+        if row and row[0]
+    }
+    following_ids.update(_connection_following_ids(db, current_user))
+
+    if not following_ids:
+        return []
+
+    following = (
+        db.query(User)
+        .filter(User.id.in_(list(following_ids)))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     
     return following
 
@@ -197,12 +314,25 @@ async def get_user_followers(
             detail="User not found"
         )
     
-    follows = db.query(Follow).filter(
-        Follow.following_id == user_id
-    ).offset(skip).limit(limit).all()
-    
-    follower_ids = [f.follower_id for f in follows]
-    followers = db.query(User).filter(User.id.in_(follower_ids)).all()
+    follower_ids = {
+        row[0]
+        for row in db.query(Follow.follower_id).filter(
+            Follow.following_id == user_id
+        ).all()
+        if row and row[0]
+    }
+    follower_ids.update(_connection_followers_ids(db, user))
+
+    if not follower_ids:
+        return []
+
+    followers = (
+        db.query(User)
+        .filter(User.id.in_(list(follower_ids)))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     
     return followers
 
@@ -225,12 +355,25 @@ async def get_user_following(
             detail="User not found"
         )
     
-    follows = db.query(Follow).filter(
-        Follow.follower_id == user_id
-    ).offset(skip).limit(limit).all()
-    
-    following_ids = [f.following_id for f in follows]
-    following = db.query(User).filter(User.id.in_(following_ids)).all()
+    following_ids = {
+        row[0]
+        for row in db.query(Follow.following_id).filter(
+            Follow.follower_id == user_id
+        ).all()
+        if row and row[0]
+    }
+    following_ids.update(_connection_following_ids(db, user))
+
+    if not following_ids:
+        return []
+
+    following = (
+        db.query(User)
+        .filter(User.id.in_(list(following_ids)))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     
     return following
 
@@ -243,12 +386,37 @@ async def check_if_following(
 ):
     """Check if current user is following a specific user"""
     
-    is_following = db.query(Follow).filter(
+    follow_row = db.query(Follow).filter(
         Follow.follower_id == current_user.id,
         Follow.following_id == user_id
-    ).first() is not None
+    ).first()
+    is_following = follow_row is not None
+
+    if not is_following and current_user.public_id:
+        target_user = db.query(User).filter(User.id == user_id).first()
+        if target_user and target_user.public_id:
+            is_following = db.query(Connection).filter(
+                Connection.follower_id == current_user.public_id,
+                Connection.following_id == target_user.public_id,
+                Connection.status == "connected",
+            ).first() is not None
     
     return {"is_following": is_following}
+
+
+@router.get("/suggestions")
+async def get_follow_suggestions(
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Suggested users to follow based on profile + interactions + mutual graph."""
+    suggestions = await recommendation_service.recommend_users_to_follow(
+        db=db,
+        user_id=current_user.id,
+        limit=limit,
+    )
+    return suggestions
 
 
 @router.get("/users/match")

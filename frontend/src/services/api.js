@@ -632,6 +632,11 @@ export const aiAPI = {
     return response.data;
   },
 
+  getProjectRecommendations: async (limit = 10) => {
+    const response = await api.get(`/ai/recommendations/projects?limit=${limit}`);
+    return response.data;
+  },
+
   getCourseRecommendations: async () => {
     const response = await api.get('/ai/recommendations/courses');
     return response.data;
@@ -704,6 +709,11 @@ export const socialAPI = {
     return response.data;
   },
 
+  getPublicProfileFull: async (publicId) => {
+    const response = await api.get(`/profile/${publicId}/full`);
+    return response.data;
+  },
+
   getProfileByUsername: async (username) => {
     const response = await api.get(`/profile/username/${username}`);
     return response.data;
@@ -711,6 +721,11 @@ export const socialAPI = {
 
   toggleConnection: async (targetPublicId) => {
     const response = await api.post('/connect', { target_public_id: targetPublicId });
+    return response.data;
+  },
+
+  getSuggestedUsers: async (limit = 20) => {
+    const response = await api.get(`/social/suggestions?limit=${limit}`);
     return response.data;
   },
 };

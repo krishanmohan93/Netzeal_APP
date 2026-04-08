@@ -7,9 +7,9 @@
     "owner": "krishanmohan",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "icon": "./assets/netzeal-app-logo.png",
+    "icon": "./assets/app-icon.png",
     "splash": {
-      "image": "./assets/netzeal-app-logo.png",
+      "image": "./assets/app-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#E3E3E3"
     },
@@ -38,8 +38,8 @@
     "android": {
       "backgroundColor": "#FFFFFF",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/netzeal-app-logo.png",
-        "monochromeImage": "./assets/netzeal-app-logo.png",
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "monochromeImage": "./assets/app-icon.png",
         "backgroundColor": "#E3E3E3"
       },
       "package": "com.netzeal.app",

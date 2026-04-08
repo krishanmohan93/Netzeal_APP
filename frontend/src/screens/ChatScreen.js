@@ -207,7 +207,7 @@ const ChatScreen = ({ route, navigation }) => {
             if (msg.id === message.data.message_id) {
               return {
                 ...msg,
-                read_by: [...msg.read_by, message.data.user_id]
+                read_by: [...(Array.isArray(msg.read_by) ? msg.read_by : []), message.data.user_id]
               };
             }
             return msg;
@@ -295,6 +295,8 @@ const ChatScreen = ({ route, navigation }) => {
 
   const renderMessage = ({ item, index }) => {
     const isOwn = item.sender_id === currentUserId;
+    const deliveredBy = Array.isArray(item.delivered_by) ? item.delivered_by : [];
+    const readBy = Array.isArray(item.read_by) ? item.read_by : [];
     const showAvatar = !isOwn && (index === messages.length - 1 || messages[index + 1]?.sender_id !== item.sender_id);
     const showTimestamp = index === 0 || messages[index - 1]?.sender_id !== item.sender_id;
     const senderAvatarUri = normalizeUri(item.sender_profile_photo);
@@ -342,8 +344,10 @@ const ChatScreen = ({ route, navigation }) => {
             
             {isOwn && (
               <View style={styles.readReceiptIcon}>
-                {item.read_by.length > 0 ? (
+                {readBy.length > 0 ? (
                   <Ionicons name="checkmark-done" size={14} color="#4CAF50" />
+                ) : deliveredBy.length > 0 ? (
+                  <Ionicons name="checkmark-done" size={14} color="#999" />
                 ) : (
                   <Ionicons name="checkmark" size={14} color="#999" />
                 )}

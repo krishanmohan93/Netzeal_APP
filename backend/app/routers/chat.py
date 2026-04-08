@@ -312,11 +312,13 @@ async def get_messages(
     for msg, sender in messages_data:
         # Get read receipts
         receipts_result = await db.execute(
-            select(MessageReadReceipt.user_id).where(
+            select(MessageReadReceipt).where(
                 MessageReadReceipt.message_id == msg.id
             )
         )
-        read_by = [user_id for (user_id,) in receipts_result.all()]
+        receipts = receipts_result.scalars().all()
+        delivered_by = [receipt.user_id for receipt in receipts if receipt.delivered_at]
+        read_by = [receipt.user_id for receipt in receipts if receipt.read_at]
         
         message_responses.append(MessageResponse(
             id=msg.id,
@@ -335,6 +337,7 @@ async def get_messages(
             is_deleted=msg.is_deleted,
             created_at=msg.created_at,
             edited_at=msg.edited_at,
+            delivered_by=delivered_by,
             read_by=read_by,
             is_read=current_user.id in read_by
         ))
@@ -413,6 +416,27 @@ async def send_message(
         created_at=datetime.utcnow()
     )
     db.add(message)
+    await db.flush()
+
+    # Mark message as delivered for other participants (read remains null until seen).
+    recipients_result = await db.execute(
+        select(ConversationParticipant.user_id).where(
+            and_(
+                ConversationParticipant.conversation_id == conversation_id,
+                ConversationParticipant.user_id != current_user.id,
+            )
+        )
+    )
+    recipient_ids = [row[0] for row in recipients_result.all() if row and row[0]]
+    delivered_at = datetime.utcnow()
+    for recipient_id in recipient_ids:
+        db.add(
+            MessageReadReceipt(
+                message_id=message.id,
+                user_id=recipient_id,
+                delivered_at=delivered_at,
+            )
+        )
     
     # Update conversation last_message_at
     await db.execute(
@@ -442,6 +466,7 @@ async def send_message(
         is_edited=False,
         is_deleted=False,
         created_at=message.created_at,
+        delivered_by=recipient_ids,
         read_by=[],
         is_read=False
     )
@@ -502,6 +527,7 @@ async def edit_message(
         is_deleted=message.is_deleted,
         created_at=message.created_at,
         edited_at=message.edited_at,
+        delivered_by=[],
         read_by=[],
         is_read=False
     )
@@ -553,14 +579,43 @@ async def mark_message_read(
             )
         )
     )
-    if existing.scalar_one_or_none():
-        return {"success": True, "already_read": True}
+    existing_receipt = existing.scalar_one_or_none()
+    if existing_receipt:
+        if existing_receipt.read_at:
+            return {"success": True, "already_read": True}
+        now_ts = datetime.utcnow()
+        if not existing_receipt.delivered_at:
+            existing_receipt.delivered_at = now_ts
+        existing_receipt.read_at = now_ts
+
+        participant_result = await db.execute(
+            select(ConversationParticipant).where(
+                and_(
+                    ConversationParticipant.conversation_id == message.conversation_id,
+                    ConversationParticipant.user_id == current_user.id
+                )
+            )
+        )
+        participant = participant_result.scalar_one_or_none()
+        if participant:
+            participant.last_read_at = now_ts
+            participant.last_seen_message_id = message_id
+
+        await db.commit()
+        await chat_manager.handle_read_receipt(
+            message.conversation_id,
+            message_id,
+            current_user.id
+        )
+        return {"success": True}
     
     # Create receipt
+    read_ts = datetime.utcnow()
     receipt = MessageReadReceipt(
         message_id=message_id,
         user_id=current_user.id,
-        read_at=datetime.utcnow()
+        delivered_at=read_ts,
+        read_at=read_ts
     )
     db.add(receipt)
     

@@ -4,7 +4,7 @@ Recommendation engine combining AI and user behavior
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from ..models import User, Post, UserInteraction, Follow, InteractionType
+from ..models import User, Post, UserInteraction, Follow, InteractionType, Connection, ContentType
 from .groq_deepseek_service import AIService
 import json
 from datetime import datetime, timedelta, timezone
@@ -25,12 +25,42 @@ def _as_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
 
 class RecommendationService:
     """Service for generating personalized recommendations"""
+
+    def _get_following_user_ids(self, db: Session, user: User) -> set[int]:
+        """
+        Return all users followed by `user` across both legacy and UUID-based graphs.
+        """
+        following_ids = {
+            row[0]
+            for row in db.query(Follow.following_id).filter(Follow.follower_id == user.id).all()
+            if row and row[0]
+        }
+
+        if user.public_id:
+            public_following_ids = {
+                row[0]
+                for row in db.query(Connection.following_id).filter(
+                    Connection.follower_id == user.public_id,
+                    Connection.status == "connected",
+                ).all()
+                if row and row[0]
+            }
+            if public_following_ids:
+                mapped_ids = {
+                    row[0]
+                    for row in db.query(User.id).filter(User.public_id.in_(public_following_ids)).all()
+                    if row and row[0]
+                }
+                following_ids.update(mapped_ids)
+
+        return following_ids
     
     async def recommend_content_for_user(
         self,
         db: Session,
         user_id: int,
-        limit: int = 10
+        limit: int = 10,
+        content_types: Optional[List[ContentType]] = None,
     ) -> List[Dict]:
         """
         Generate personalized content recommendations based on user behavior
@@ -62,6 +92,8 @@ class RecommendationService:
         
         # Find posts with matching tags
         query = db.query(Post).filter(Post.author_id != user_id)
+        if content_types:
+            query = query.filter(Post.content_type.in_(content_types))
         if interacted_post_ids:
             query = query.filter(~Post.id.in_(interacted_post_ids))
         
@@ -100,7 +132,21 @@ class RecommendationService:
             return [self._post_to_dict(post) for post in top_posts]
         
         # Fallback: trending content
-        return await self.get_trending_content(db, limit)
+        return await self.get_trending_content(db, limit, content_types=content_types)
+
+    async def recommend_projects_for_user(
+        self,
+        db: Session,
+        user_id: int,
+        limit: int = 10,
+    ) -> List[Dict]:
+        """Recommend project posts (ContentType.PROJECT) for a user."""
+        return await self.recommend_content_for_user(
+            db=db,
+            user_id=user_id,
+            limit=limit,
+            content_types=[ContentType.PROJECT],
+        )
     
     async def recommend_users_to_follow(
         self,
@@ -128,16 +174,30 @@ class RecommendationService:
         behavior = self.summarize_user_behavior(db, user_id)
         behavior_topic_tags = set((behavior.get("top_tags") or []) + (behavior.get("top_topics") or []))
         
-        # Get already following
-        following_ids = [user_id] + [
-            follow.following_id
-            for follow in db.query(Follow).filter(Follow.follower_id == user_id).all()
-        ]
-        
+        # Get already-followed users across both social graph implementations
+        following_ids = self._get_following_user_ids(db, user)
+        following_ids.add(user_id)
+
         # Find users with matching interests/skills
         candidates = db.query(User).filter(
-            User.id.notin_(following_ids)
+            User.id.notin_(list(following_ids))
         ).limit(limit * 3).all()
+
+        # Capture recent interaction affinity with candidate authors.
+        # This nudges suggestions toward people whose content the user engages with.
+        recent_interactions = (
+            db.query(UserInteraction)
+            .filter(UserInteraction.user_id == user_id)
+            .order_by(desc(UserInteraction.created_at))
+            .limit(120)
+            .all()
+        )
+        author_affinity = Counter()
+        for interaction in recent_interactions:
+            if interaction.post and interaction.post.author_id:
+                author_id = int(interaction.post.author_id)
+                if author_id != user_id:
+                    author_affinity[author_id] += 1
         
         scored_users = []
         for candidate in candidates:
@@ -147,6 +207,14 @@ class RecommendationService:
             # Tag matching
             score += len(user_tags & candidate_tags) * 10
             score += len(behavior_topic_tags & candidate_tags) * 6
+
+            # Mutual connections boost (LinkedIn-style signal)
+            candidate_following_ids = self._get_following_user_ids(db, candidate)
+            mutual_connections = len(following_ids & candidate_following_ids)
+            score += mutual_connections * 8
+
+            # Engagement affinity boost based on recently engaged authors
+            score += min(author_affinity.get(candidate.id, 0), 10) * 2
             
             # Activity boost (users who post regularly)
             post_count = db.query(func.count(Post.id)).filter(
@@ -242,7 +310,8 @@ Format as a simple numbered list."""
     async def get_trending_content(
         self,
         db: Session,
-        limit: int = 10
+        limit: int = 10,
+        content_types: Optional[List[ContentType]] = None,
     ) -> List[Dict]:
         """
         Get trending content based on engagement
@@ -255,7 +324,11 @@ Format as a simple numbered list."""
             List of trending posts
         """
         # Calculate engagement score: likes + comments*2 + shares*3
-        posts = db.query(Post).order_by(
+        query = db.query(Post)
+        if content_types:
+            query = query.filter(Post.content_type.in_(content_types))
+
+        posts = query.order_by(
             desc(Post.likes_count + Post.comments_count * 2 + Post.shares_count * 3)
         ).limit(limit).all()
         
@@ -433,6 +506,7 @@ Format as a simple numbered list."""
         """Convert user to dictionary"""
         return {
             "id": user.id,
+            "public_id": str(user.public_id) if user.public_id else None,
             "username": user.username,
             "full_name": user.full_name,
             "bio": user.bio,

@@ -360,6 +360,23 @@ async def get_content_recommendations(
     return recommendations
 
 
+@router.get("/recommendations/projects", response_model=List[Dict])
+async def get_project_recommendations(
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get personalized project recommendations."""
+
+    recommendations = await recommendation_service.recommend_projects_for_user(
+        db=db,
+        user_id=current_user.id,
+        limit=limit
+    )
+
+    return recommendations
+
+
 @router.get("/recommendations/users", response_model=List[Dict])
 async def get_user_recommendations(
     limit: int = Query(10, ge=1, le=50),

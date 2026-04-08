@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius, typography } from '../utils/theme';
-import api from '../services/api';
+import api, { socialAPI } from '../services/api';
 import { normalizeUri } from '../utils/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -34,26 +34,39 @@ const SearchScreen = ({ navigation }) => {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTimeout, setSearchTimeout] = useState(null);
+  const [followPendingMap, setFollowPendingMap] = useState({});
 
   // Focus effect to possibly clear or refresh? No, keep state.
 
   const performSearch = useCallback(async (searchText, tab) => {
-    if (!searchText.trim()) {
-      setResults([]);
-      return;
-    }
-
     setLoading(true);
     try {
       let response;
 
       if (tab === 'people') {
+        if (!searchText.trim()) {
+          const suggestions = await socialAPI.getSuggestedUsers(20);
+          setResults(Array.isArray(suggestions) ? suggestions : []);
+          return;
+        }
         response = await api.get('/search/users', { params: { query: searchText } });
       } else if (tab === 'posts') {
+        if (!searchText.trim()) {
+          setResults([]);
+          return;
+        }
         response = await api.get('/content/search/posts', { params: { query: searchText } });
       } else if (tab === 'reels') {
+        if (!searchText.trim()) {
+          setResults([]);
+          return;
+        }
         response = await api.get('/content/search/reels', { params: { query: searchText } });
       } else if (tab === 'projects') {
+        if (!searchText.trim()) {
+          setResults([]);
+          return;
+        }
         response = await api.get('/content/search/projects', { params: { query: searchText } });
       }
 
@@ -72,7 +85,11 @@ const SearchScreen = ({ navigation }) => {
     if (searchTimeout) clearTimeout(searchTimeout);
 
     if (!text.trim()) {
-      setResults([]);
+      if (activeTab === 'people') {
+        performSearch('', activeTab);
+      } else {
+        setResults([]);
+      }
       return;
     }
 
@@ -86,10 +103,18 @@ const SearchScreen = ({ navigation }) => {
     setActiveTab(tabId);
     if (query.trim()) {
       performSearch(query, tabId);
+    } else if (tabId === 'people') {
+      performSearch('', tabId);
     } else {
       setResults([]);
     }
   };
+
+  useEffect(() => {
+    if (activeTab === 'people' && !query.trim()) {
+      performSearch('', 'people');
+    }
+  }, [activeTab, query, performSearch]);
 
   const handleUserPress = (user) => {
     if (user.public_id) {
@@ -100,6 +125,49 @@ const SearchScreen = ({ navigation }) => {
 
   const handlePostPress = (post) => {
     navigation.navigate('PostDetail', { postId: post.id });
+  };
+
+  const handleFollowToggle = async (user) => {
+    const userKey = user.public_id || user.id;
+    if (!userKey || followPendingMap[userKey]) {
+      return;
+    }
+
+    const wasFollowing = Boolean(user.is_following);
+    setFollowPendingMap((prev) => ({ ...prev, [userKey]: true }));
+    setResults((prev) =>
+      prev.map((item) =>
+        (item.public_id || item.id) === userKey
+          ? { ...item, is_following: !wasFollowing }
+          : item
+      )
+    );
+
+    try {
+      if (user.public_id) {
+        await socialAPI.toggleConnection(user.public_id);
+      } else if (user.id) {
+        if (wasFollowing) {
+          await socialAPI.unfollowUser(user.id);
+        } else {
+          await socialAPI.followUser(user.id);
+        }
+      }
+    } catch (error) {
+      setResults((prev) =>
+        prev.map((item) =>
+          (item.public_id || item.id) === userKey
+            ? { ...item, is_following: wasFollowing }
+            : item
+        )
+      );
+    } finally {
+      setFollowPendingMap((prev) => {
+        const next = { ...prev };
+        delete next[userKey];
+        return next;
+      });
+    }
   };
 
   // RENDERERS
@@ -117,6 +185,9 @@ const SearchScreen = ({ navigation }) => {
     const username = item.username || '';
     const initials = name.substring(0, 2).toUpperCase();
     const avatarUri = getValidUri(item.profile_photo);
+    const userKey = item.public_id || item.id;
+    const followPending = Boolean(userKey && followPendingMap[userKey]);
+    const isFollowing = Boolean(item.is_following);
 
     return (
       <TouchableOpacity style={styles.userItem} onPress={() => handleUserPress(item)}>
@@ -133,7 +204,22 @@ const SearchScreen = ({ navigation }) => {
           <Text style={styles.userName}>{name}</Text>
           <Text style={styles.userHandle}>@{username}</Text>
         </View>
-        {/* Connection status could go here */}
+        <TouchableOpacity
+          style={[
+            styles.followButton,
+            isFollowing && styles.followingButton,
+            followPending && styles.followButtonDisabled,
+          ]}
+          onPress={(event) => {
+            event?.stopPropagation?.();
+            handleFollowToggle(item);
+          }}
+          disabled={followPending}
+        >
+          <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
+            {isFollowing ? 'Following' : 'Follow'}
+          </Text>
+        </TouchableOpacity>
       </TouchableOpacity>
     );
   };
@@ -236,7 +322,7 @@ const SearchScreen = ({ navigation }) => {
       ) : (
         <FlatList
           data={results}
-          keyExtractor={(item) => item.id?.toString() || item.public_id?.toString() || Math.random().toString()}
+          keyExtractor={(item) => item.public_id?.toString() || item.id?.toString() || `${item.username}`}
           renderItem={renderItem}
           numColumns={activeTab === 'people' || activeTab === 'projects' ? 1 : 3}
           key={activeTab} // Force re-render when switching columns
@@ -244,7 +330,11 @@ const SearchScreen = ({ navigation }) => {
           ListEmptyComponent={
             <View style={styles.center}>
               <Text style={styles.emptyText}>
-                {query ? `No ${activeTab} found.` : 'Start searching...'}
+                {query
+                  ? `No ${activeTab} found.`
+                  : activeTab === 'people'
+                    ? 'No people suggestions available.'
+                    : 'Start searching...'}
               </Text>
             </View>
           }
@@ -347,6 +437,31 @@ const styles = StyleSheet.create({
   },
   userInfo: {
     flex: 1,
+  },
+  followButton: {
+    minWidth: 86,
+    paddingHorizontal: 12,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  followingButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#dbdbdb',
+  },
+  followButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  followingButtonText: {
+    color: '#111',
+  },
+  followButtonDisabled: {
+    opacity: 0.65,
   },
   userName: {
     fontWeight: '600',

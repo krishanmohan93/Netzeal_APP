@@ -31,6 +31,29 @@ const extractAssistantText = (payload) => {
   return text || 'I could not generate a response right now. Please try again.';
 };
 
+const shouldShowConnectionSuggestions = (text) => {
+  const query = String(text || '').toLowerCase();
+  if (!query) return false;
+
+  const intentKeywords = [
+    'connect',
+    'connection',
+    'network',
+    'networking',
+    'follow',
+    'peers',
+    'people to follow',
+    'people to connect',
+    'collaborate',
+    'collaboration',
+    'team up',
+    'mentor',
+    'mentorship',
+  ];
+
+  return intentKeywords.some((keyword) => query.includes(keyword));
+};
+
 const MessageBubble = ({ message, isUser }) => {
   const isStreaming = Boolean(message?.isStreaming);
 
@@ -222,6 +245,7 @@ const AIBotScreen = () => {
       const formattedMessages = [];
 
       history.reverse().forEach((conv) => {
+        const allowConnectionSuggestions = shouldShowConnectionSuggestions(conv.message);
         formattedMessages.push({
           id: `user-${conv.id}`,
           content: conv.message || '...',
@@ -234,6 +258,10 @@ const AIBotScreen = () => {
           isUser: false,
           timestamp: conv.created_at || new Date().toISOString(),
           recommendations: conv.recommendations,
+          recommendations_users: allowConnectionSuggestions && Array.isArray(conv?.recommendations_users)
+            ? conv.recommendations_users
+            : [],
+          allowConnectionSuggestions,
         });
       });
 
@@ -252,6 +280,7 @@ const AIBotScreen = () => {
   const handleSend = async () => {
     if (!inputText.trim()) return;
     const messageToSend = inputText.trim();
+    const allowConnectionSuggestions = shouldShowConnectionSuggestions(messageToSend);
 
     const userMessage = {
       id: `user-${Date.now()}`,
@@ -281,8 +310,11 @@ const AIBotScreen = () => {
         isStreaming: true,
         recommendations: Array.isArray(response?.recommendations) ? response.recommendations : [],
         recommendations_content: Array.isArray(response?.recommendations_content) ? response.recommendations_content : [],
-        recommendations_users: Array.isArray(response?.recommendations_users) ? response.recommendations_users : [],
+        recommendations_users: allowConnectionSuggestions && Array.isArray(response?.recommendations_users)
+          ? response.recommendations_users
+          : [],
         recommendations_opportunities: Array.isArray(response?.recommendations_opportunities) ? response.recommendations_opportunities : [],
+        allowConnectionSuggestions,
       };
 
       setMessages((prev) => [...prev, aiMessage]);
@@ -367,7 +399,7 @@ const AIBotScreen = () => {
             ))}
           </View>
         )}
-        {item.recommendations_users && item.recommendations_users.length > 0 && (
+        {item.allowConnectionSuggestions && item.recommendations_users && item.recommendations_users.length > 0 && (
           <View style={styles.recommendationsContainer}>
             <Text style={styles.recHeader}>🤝 People to connect</Text>
             {item.recommendations_users.map((u, index) => (
@@ -376,7 +408,15 @@ const AIBotScreen = () => {
                 user={u}
                 onConnect={u?.id ? async () => {
                   try {
-                    await socialAPI.followUser(u.id);
+                    if (u.public_id) {
+                      await socialAPI.toggleConnection(u.public_id);
+                    } else if (u.id) {
+                      if (u.is_following) {
+                        await socialAPI.unfollowUser(u.id);
+                      } else {
+                        await socialAPI.followUser(u.id);
+                      }
+                    }
                   } catch (e) {
                     // noop
                   }

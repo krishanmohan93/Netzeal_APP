@@ -103,6 +103,8 @@ const EMPTY_PROFILE: UserProfile = {
   following: 0,
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const toSafeString = (value: any): string =>
   value === null || value === undefined ? '' : String(value);
 
@@ -110,6 +112,17 @@ const normalizeUserId = (value: any): string | null => {
   if (value === null || value === undefined) return null;
   const id = String(value).trim();
   return id.length > 0 ? id : null;
+};
+
+const normalizeInternalUserId = (...values: any[]): number | null => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed);
+    }
+  }
+  return null;
 };
 
 const normalizeProfile = (
@@ -141,6 +154,82 @@ const normalizeProfile = (
     following: Number(source.following_count ?? source.following ?? fallback.following ?? 0) || 0,
     ...overrides,
   };
+};
+
+const mapProjectsFromProfilePayload = (projectItems: any[] = []): Project[] => {
+  return (Array.isArray(projectItems) ? projectItems : [])
+    .map((item, index) => ({
+      id: toSafeString(item?.id || `project-${index}`),
+      title: toSafeString(item?.title || item?.content || 'Project'),
+      subtitle: toSafeString(item?.type || 'Project'),
+      description: toSafeString(item?.content || ''),
+    }))
+    .filter((item) => item.title.length > 0);
+};
+
+const normalizeMediaItems = (mediaItems: any[] = []): any[] => {
+  return (Array.isArray(mediaItems) ? mediaItems : [])
+    .map((item) => {
+      const resolvedUrl = normalizeUri(
+        item?.url || item?.media_url || item?.thumb_url || item?.thumbnail_url || ''
+      );
+      if (!resolvedUrl) {
+        return null;
+      }
+      return {
+        ...item,
+        url: resolvedUrl,
+        media_type: item?.media_type || item?.type || 'image',
+      };
+    })
+    .filter(Boolean);
+};
+
+const normalizePostsPayload = (rawPosts: any[] = []): Post[] => {
+  const sourcePosts = Array.isArray(rawPosts) ? rawPosts : [];
+  const seen = new Set<string>();
+  const normalized: Post[] = [];
+
+  sourcePosts.forEach((rawPost, index) => {
+    const postId = toSafeString(rawPost?.id || rawPost?.post_id || rawPost?.uuid || `post-${index}`);
+    if (!postId || seen.has(postId)) {
+      return;
+    }
+
+    const mediaUrls = Array.isArray(rawPost?.media_urls)
+      ? rawPost.media_urls.map((url: any) => normalizeUri(url)).filter(Boolean)
+      : [];
+    const mediaItems = normalizeMediaItems(rawPost?.media_items || []);
+    const primaryMediaUrl = normalizeUri(
+      rawPost?.media_url ||
+        rawPost?.thumbnail_url ||
+        rawPost?.image_url ||
+        mediaUrls[0] ||
+        mediaItems[0]?.url ||
+        ''
+    );
+
+    const normalizedPost: Post = {
+      ...rawPost,
+      id: postId,
+      title: toSafeString(rawPost?.title || ''),
+      caption: toSafeString(rawPost?.caption ?? rawPost?.content ?? ''),
+      description: toSafeString(rawPost?.description ?? rawPost?.content ?? ''),
+      media_url: primaryMediaUrl || '',
+      media_type: toSafeString(rawPost?.media_type || rawPost?.type || rawPost?.content_type || 'image').toLowerCase(),
+      media_items: mediaItems.length > 0 ? mediaItems : undefined,
+      author_id: toSafeString(rawPost?.author_id || rawPost?.author?.id || ''),
+      author_full_name: toSafeString(rawPost?.author_full_name || rawPost?.author?.full_name || rawPost?.author?.name || ''),
+      author_username: toSafeString(rawPost?.author_username || rawPost?.author?.username || ''),
+      likes_count: Number(rawPost?.likes_count || 0) || 0,
+      comments_count: Number(rawPost?.comments_count || 0) || 0,
+    };
+
+    normalized.push(normalizedPost);
+    seen.add(postId);
+  });
+
+  return normalized;
 };
 
 // ============================================================================
@@ -368,7 +457,10 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<string | null>(null); // For viewing other users
+  const [viewingUserInternalId, setViewingUserInternalId] = useState<number | null>(null);
   const [isOwnProfile, setIsOwnProfile] = useState(true);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
   const [fullscreen, setFullscreen] = useState({ visible: false, items: [], index: 0 });
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -385,6 +477,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const loadUserData = async () => {
     setProfileLoading(true);
     setProfileError(null);
+    let loadedPostsFromFullProfile = false;
+    let loadedProjectsFromFullProfile = false;
 
     try {
       // First get current logged-in user
@@ -414,22 +508,64 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         // Viewing another user's profile
         setIsOwnProfile(false);
         setViewingUserId(paramUserId);
+        setViewingUserInternalId(null);
+        setIsFollowing(false);
 
         try {
-          const otherUserProfile = await socialAPI.getPublicProfile(paramUserId);
-          if (!otherUserProfile) {
-            throw new Error('Empty profile response');
-          }
+          if (UUID_REGEX.test(paramUserId)) {
+            const fullProfile = await socialAPI.getPublicProfileFull(paramUserId);
+            if (!fullProfile?.user) {
+              throw new Error('Empty profile response');
+            }
 
-          setProfile(
-            normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
-              id: paramUserId,
-              username: toSafeString(otherUserProfile.username || paramUsername || 'user'),
-              tagline: '',
-            })
-          );
+            const otherUserProfile = fullProfile.user;
+            setProfile(
+              normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
+                id: paramUserId,
+                username: toSafeString(otherUserProfile.username || paramUsername || 'user'),
+                tagline: '',
+              })
+            );
+            setViewingUserInternalId(
+              normalizeInternalUserId(
+                otherUserProfile?.internal_id,
+                otherUserProfile?.user_id,
+                otherUserProfile?.id
+              )
+            );
+            setIsFollowing(Boolean(otherUserProfile?.is_following));
+
+            const projectCards = mapProjectsFromProfilePayload(fullProfile.projects || []);
+            setProjects(projectCards);
+            loadedProjectsFromFullProfile = projectCards.length > 0;
+
+            const profilePosts = [
+              ...(Array.isArray(fullProfile.posts) ? fullProfile.posts : []),
+              ...(Array.isArray(fullProfile.shorts) ? fullProfile.shorts : []),
+            ];
+            const normalizedPosts = normalizePostsPayload(profilePosts);
+            setUserPosts(normalizedPosts);
+            if (normalizedPosts.length > 0) {
+              setLoading(false);
+              loadedPostsFromFullProfile = true;
+            }
+          } else {
+            const otherUserProfile = await authAPI.getUserProfile(paramUserId);
+            setProfile(
+              normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
+                id: paramUserId,
+                username: toSafeString(otherUserProfile?.username || paramUsername || 'user'),
+                tagline: '',
+              })
+            );
+            setViewingUserInternalId(
+              normalizeInternalUserId(otherUserProfile?.id, otherUserProfile?.user_id)
+            );
+            setIsFollowing(Boolean(otherUserProfile?.is_following));
+          }
         } catch (error) {
           setProfileError('Failed to load user profile');
+          setIsFollowing(false);
           setProfile(
             normalizeProfile({ username: paramUsername || 'user' }, EMPTY_PROFILE, {
               id: paramUserId,
@@ -441,6 +577,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         // Viewing own profile
         setIsOwnProfile(true);
         setViewingUserId(userIdToLoad);
+        setViewingUserInternalId(null);
+        setIsFollowing(false);
 
         if (storedUserData) {
           setProfile(normalizeProfile(storedUserData, EMPTY_PROFILE));
@@ -463,11 +601,47 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           }
         }
 
+        const resolvedPublicId = normalizeUserId(
+          storedUserData?.public_id || storedUserData?.id || storedUserData?.user_id || storedUserData?.userId || userIdToLoad
+        );
+
+        if (resolvedPublicId && UUID_REGEX.test(resolvedPublicId)) {
+          try {
+            const fullProfile = await socialAPI.getPublicProfileFull(resolvedPublicId);
+            if (fullProfile?.user) {
+              setProfile((prev) =>
+                normalizeProfile(
+                  fullProfile.user,
+                  prev || EMPTY_PROFILE,
+                  { id: resolvedPublicId }
+                )
+              );
+            }
+
+            const projectCards = mapProjectsFromProfilePayload(fullProfile?.projects || []);
+            if (projectCards.length > 0) {
+              setProjects(projectCards);
+              loadedProjectsFromFullProfile = true;
+            }
+
+            const profilePosts = [
+              ...(Array.isArray(fullProfile?.posts) ? fullProfile.posts : []),
+              ...(Array.isArray(fullProfile?.shorts) ? fullProfile.shorts : []),
+            ];
+            const normalizedPosts = normalizePostsPayload(profilePosts);
+            if (normalizedPosts.length > 0) {
+              setUserPosts(normalizedPosts);
+              setLoading(false);
+              loadedPostsFromFullProfile = true;
+            }
+          } catch (error) {}
+        }
+
         // Load projects and experience from AsyncStorage (only for own profile)
         const projectsData = await AsyncStorage.getItem('user_projects');
         const experienceData = await AsyncStorage.getItem('user_experience');
 
-        if (projectsData) {
+        if (projectsData && !loadedProjectsFromFullProfile) {
           try {
             setProjects(JSON.parse(projectsData));
           } catch (parseError) {}
@@ -485,11 +659,15 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         loggedInUserId ||
         normalizeUserId(storedUserData?.public_id || storedUserData?.id || storedUserData?.user_id || storedUserData?.userId);
 
-      await loadUserPosts(effectiveUserId);
+      if (!loadedPostsFromFullProfile) {
+        await loadUserPosts(effectiveUserId);
+      }
     } catch (error) {
       setProfileError('Failed to load profile');
       setProfile(normalizeProfile({}, EMPTY_PROFILE));
-      await loadUserPosts(paramUserId || currentUserId);
+      if (!loadedPostsFromFullProfile) {
+        await loadUserPosts(paramUserId || currentUserId);
+      }
     } finally {
       setProfileLoading(false);
     }
@@ -503,9 +681,9 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       if (userIdToLoad) {
         const response = await contentAPI.getUserPosts(userIdToLoad, 0, 20);
         if (Array.isArray(response)) {
-          setUserPosts(response);
+          setUserPosts(normalizePostsPayload(response));
         } else if (Array.isArray(response?.items)) {
-          setUserPosts(response.items);
+          setUserPosts(normalizePostsPayload(response.items));
         } else {
           setUserPosts([]);
         }
@@ -590,6 +768,74 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     navigation.navigate('CreatePost', { postToEdit: post });
   };
 
+  const handleMessagePress = useCallback(() => {
+    if (!viewingUserInternalId) {
+      Alert.alert('Unavailable', 'Message is not available for this profile yet.');
+      return;
+    }
+
+    navigation.navigate('Chat', {
+      userId: viewingUserInternalId,
+      username: profile?.username,
+      conversationTitle: profile?.fullName || profile?.username || 'Chat',
+    });
+  }, [navigation, viewingUserInternalId, profile?.username, profile?.fullName]);
+
+  const handleFollowToggle = useCallback(async () => {
+    if (isOwnProfile || followLoading) {
+      return;
+    }
+
+    const targetPublicId = viewingUserId;
+    const targetInternalId = viewingUserInternalId;
+
+    if (!targetPublicId && !targetInternalId) {
+      Alert.alert('Error', 'Unable to update follow status for this user.');
+      return;
+    }
+
+    const wasFollowing = isFollowing;
+    const followerDelta = wasFollowing ? -1 : 1;
+
+    setFollowLoading(true);
+    setIsFollowing(!wasFollowing);
+    setProfile((prev) =>
+      prev
+        ? {
+            ...prev,
+            peers: Math.max(0, (Number(prev.peers) || 0) + followerDelta),
+          }
+        : prev
+    );
+
+    try {
+      if (targetPublicId && UUID_REGEX.test(targetPublicId)) {
+        await socialAPI.toggleConnection(targetPublicId);
+      } else if (targetInternalId) {
+        if (wasFollowing) {
+          await socialAPI.unfollowUser(targetInternalId);
+        } else {
+          await socialAPI.followUser(targetInternalId);
+        }
+      } else {
+        throw new Error('No valid user id for follow action');
+      }
+    } catch (error) {
+      setIsFollowing(wasFollowing);
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              peers: Math.max(0, (Number(prev.peers) || 0) - followerDelta),
+            }
+          : prev
+      );
+      Alert.alert('Error', 'Failed to update follow status.');
+    } finally {
+      setFollowLoading(false);
+    }
+  }, [isOwnProfile, followLoading, isFollowing, viewingUserId, viewingUserInternalId]);
+
   const handleCVUpload = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -639,11 +885,27 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const handleOpenFullscreen = (index: number) => {
     if (userPosts.length > 0) {
       const items = userPosts
-        .map((p) => ({
-          id: p.id,
-          url: normalizeUri(p.media_url),
-          media_type: p.media_type || 'image',
-        }))
+        .flatMap((p) => {
+          if (Array.isArray(p.media_items) && p.media_items.length > 0) {
+            return p.media_items
+              .map((m: any, mediaIndex: number) => ({
+                id: `${p.id}-${mediaIndex}`,
+                url: normalizeUri(m?.url || m?.media_url || m?.thumbnail_url || ''),
+                media_type: m?.media_type || m?.type || p.media_type || 'image',
+              }))
+              .filter((item: any) => Boolean(item.url));
+          }
+
+          return [
+            {
+              id: p.id,
+              url: normalizeUri(
+                p.media_url || (Array.isArray(p.media_urls) ? p.media_urls[0] : '')
+              ),
+              media_type: p.media_type || p.type || 'image',
+            },
+          ];
+        })
         .filter((item) => item.url);
       if (items.length > 0) {
         const safeIndex = Math.min(index, items.length - 1);
@@ -671,6 +933,10 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const displayName = displayProfile.fullName || displayProfile.username || 'User';
   const displayTagline = displayProfile.tagline || '';
   const displayBio = displayProfile.bio || '';
+  const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
+  const isOtherProfileByRoute =
+    Boolean(paramUserId) && (!currentUserId || String(paramUserId) !== String(currentUserId));
+  const showSocialActions = canGoBack || !isOwnProfile || isOtherProfileByRoute;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -678,7 +944,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         {/* Header with background */}
         <View style={styles.headerBackground}>
           <View style={styles.headerContent}>
-            {!isOwnProfile && (
+            {showSocialActions && (
               <TouchableOpacity
                 style={styles.backButton}
                 onPress={() => navigation.goBack()}
@@ -697,6 +963,14 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
                 onPress={() => navigation.navigate('Settings')}
               >
                 <Icon name="settings-outline" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+            {showSocialActions && (
+              <TouchableOpacity
+                style={styles.settingsButton}
+                onPress={handleMessagePress}
+              >
+                <Icon name="chatbubble-outline" size={22} color={colors.primary} />
               </TouchableOpacity>
             )}
           </View>
@@ -724,6 +998,36 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
             avatarUrl={displayProfile.avatar}
           />
 
+          {showSocialActions && (
+            <View style={styles.profileActionRow}>
+              <TouchableOpacity
+                style={[
+                  styles.followActionButton,
+                  isFollowing && styles.followingActionButton,
+                  followLoading && styles.profileActionDisabled,
+                ]}
+                onPress={handleFollowToggle}
+                disabled={followLoading}
+              >
+                <Text
+                  style={[
+                    styles.followActionText,
+                    isFollowing && styles.followingActionText,
+                  ]}
+                >
+                  {followLoading ? 'Please wait...' : isFollowing ? 'Following' : 'Follow'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.messageActionButton}
+                onPress={handleMessagePress}
+              >
+                <Text style={styles.messageActionText}>Message</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {profileError && (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText}>{profileError}</Text>
@@ -735,8 +1039,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
             <BioCard title="Professional Bio" description={displayBio} />
           ) : null}
 
-          {/* Projects Carousel - Only show for own profile */}
-          {isOwnProfile && projects.length > 0 && (
+          {/* Projects Carousel */}
+          {projects.length > 0 && (
             <ProjectCarousel
               projects={projects}
               onProjectPress={(project) => {
@@ -882,6 +1186,53 @@ const styles = StyleSheet.create({
   errorText: {
     color: colors.textSecondary,
     fontSize: typography.bodySmall.fontSize,
+  },
+  profileActionRow: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  followActionButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  followingActionButton: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.divider,
+  },
+  followActionText: {
+    color: colors.surface,
+    fontSize: typography.bodySmall.fontSize,
+    fontWeight: '700',
+  },
+  followingActionText: {
+    color: colors.text,
+  },
+  messageActionButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.divider,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  messageActionText: {
+    color: colors.text,
+    fontSize: typography.bodySmall.fontSize,
+    fontWeight: '700',
+  },
+  profileActionDisabled: {
+    opacity: 0.6,
   },
 
   // Post Card Styles

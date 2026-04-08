@@ -22,6 +22,7 @@ import CreatePostScreen from '../screens/CreatePostScreen';
 import SearchScreen from '../screens/SearchScreen';
 import ChatScreen from '../screens/ChatScreen';
 import ConversationsScreen from '../screens/ConversationsScreen';
+import NewChatScreen from '../screens/NewChatScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import HelpScreen from '../screens/HelpScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
@@ -94,6 +95,11 @@ const NavigationContent = () => {
             name="Chat"
             component={ChatScreen}
             options={{ title: 'Chat' }}
+          />
+          <Stack.Screen
+            name="NewChat"
+            component={NewChatScreen}
+            options={{ title: 'New Chat' }}
           />
           <Stack.Screen
             name="Settings"

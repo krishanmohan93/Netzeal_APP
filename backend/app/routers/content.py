@@ -17,7 +17,7 @@ from ..core.security import get_current_user
 from ..core.rate_limit import post_create_rate_limit, engagement_rate_limit
 from ..core.feature_gates import require_live_streaming_enabled, require_semantic_features_enabled
 from ..core.cloudinary_config import cloudinary_service
-from ..models import User, Post, Comment, Like, Bookmark, UserInteraction, InteractionType, Connection
+from ..models import User, Post, Comment, Like, Bookmark, UserInteraction, InteractionType, Connection, Follow
 from ..models.content import ContentType, LiveSession, LiveComment, PostMedia, MediaType
 from ..schemas.content import (
     PostCreate,
@@ -114,16 +114,31 @@ def get_qdrant_service():
 
 
 def _get_allowed_author_ids(db: Session, current_user: User) -> List[int]:
-    connection_rows = (
-        db.query(Connection.following_id)
-        .filter(Connection.follower_id == current_user.public_id, Connection.status == "connected")
-        .all()
-    )
-    public_ids = {current_user.public_id}
-    public_ids.update(row[0] for row in connection_rows if row[0])
-    if not public_ids:
-        return []
-    return [row[0] for row in db.query(User.id).filter(User.public_id.in_(public_ids)).all()]
+    allowed_author_ids = {current_user.id}
+
+    legacy_following = {
+        row[0]
+        for row in db.query(Follow.following_id).filter(Follow.follower_id == current_user.id).all()
+        if row and row[0]
+    }
+    allowed_author_ids.update(legacy_following)
+
+    if current_user.public_id:
+        connection_rows = (
+            db.query(Connection.following_id)
+            .filter(Connection.follower_id == current_user.public_id, Connection.status == "connected")
+            .all()
+        )
+        public_ids = {row[0] for row in connection_rows if row and row[0]}
+        if public_ids:
+            mapped_ids = {
+                row[0]
+                for row in db.query(User.id).filter(User.public_id.in_(list(public_ids))).all()
+                if row and row[0]
+            }
+            allowed_author_ids.update(mapped_ids)
+
+    return list(allowed_author_ids)
 
 
 def _resolve_upload_mime(upload: UploadFile) -> str:

@@ -92,6 +92,7 @@ class MessageResponse(BaseModel):
     is_deleted: bool = False
     created_at: datetime
     edited_at: Optional[datetime] = None
+    delivered_by: List[int] = []  # User IDs for whom message was delivered
     read_by: List[int] = []  # User IDs who read this message
     is_read: bool = False  # Whether current user has read it
     

@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, desc, select
 from uuid import UUID, uuid4
-from typing import List
+from typing import List, Set
 
 from ..core.database import get_db, get_async_db
 from ..core.rate_limit import chat_message_rate_limit, engagement_rate_limit
 from ..models.user import User
 from ..models.connection import Connection, ConversationV2, MessageV2
+from ..models.social import Follow
 from ..models.content import Post, ContentType
 from sqlalchemy.sql import func
 from ..schemas.connect import (
@@ -27,6 +28,7 @@ from ..schemas.connect import (
 from ..routers.auth import get_current_user
 from ..services.notification_service import create_notification_async
 from ..schemas.content import PostResponse
+from ..utils.redis_cache import invalidate_profile_cache
 
 router = APIRouter(tags=["Network"])
 
@@ -64,6 +66,105 @@ def _ordered_pair(a: UUID, b: UUID) -> tuple[UUID, UUID]:
     return (a, b) if str(a) < str(b) else (b, a)
 
 
+async def _public_ids_to_internal_ids(db: AsyncSession, public_ids: Set[UUID]) -> Set[int]:
+    if not public_ids:
+        return set()
+    result = await db.execute(select(User.id).where(User.public_id.in_(list(public_ids))))
+    return {
+        row[0]
+        for row in result.all()
+        if row and row[0]
+    }
+
+
+async def _collect_followers_ids(db: AsyncSession, target_user: User) -> Set[int]:
+    # Legacy integer graph
+    legacy_result = await db.execute(
+        select(Follow.follower_id).where(Follow.following_id == target_user.id)
+    )
+    follower_ids = {
+        row[0]
+        for row in legacy_result.all()
+        if row and row[0]
+    }
+
+    # UUID graph
+    if target_user.public_id:
+        connection_result = await db.execute(
+            select(Connection.follower_id).where(
+                and_(
+                    Connection.following_id == target_user.public_id,
+                    Connection.status == "connected",
+                )
+            )
+        )
+        follower_public_ids = {
+            row[0]
+            for row in connection_result.all()
+            if row and row[0]
+        }
+        follower_ids.update(await _public_ids_to_internal_ids(db, follower_public_ids))
+
+    return follower_ids
+
+
+async def _collect_following_ids(db: AsyncSession, source_user: User) -> Set[int]:
+    # Legacy integer graph
+    legacy_result = await db.execute(
+        select(Follow.following_id).where(Follow.follower_id == source_user.id)
+    )
+    following_ids = {
+        row[0]
+        for row in legacy_result.all()
+        if row and row[0]
+    }
+
+    # UUID graph
+    if source_user.public_id:
+        connection_result = await db.execute(
+            select(Connection.following_id).where(
+                and_(
+                    Connection.follower_id == source_user.public_id,
+                    Connection.status == "connected",
+                )
+            )
+        )
+        following_public_ids = {
+            row[0]
+            for row in connection_result.all()
+            if row and row[0]
+        }
+        following_ids.update(await _public_ids_to_internal_ids(db, following_public_ids))
+
+    return following_ids
+
+
+async def _is_following(db: AsyncSession, source_user: User, target_user: User) -> bool:
+    legacy_result = await db.execute(
+        select(Follow.id).where(
+            and_(
+                Follow.follower_id == source_user.id,
+                Follow.following_id == target_user.id,
+            )
+        )
+    )
+    if legacy_result.scalar_one_or_none():
+        return True
+
+    if source_user.public_id and target_user.public_id:
+        connection_result = await db.execute(
+            select(Connection.id).where(
+                and_(
+                    Connection.follower_id == source_user.public_id,
+                    Connection.following_id == target_user.public_id,
+                    Connection.status == "connected",
+                )
+            )
+        )
+        return connection_result.scalar_one_or_none() is not None
+    return False
+
+
 @router.get("/search/users", response_model=List[SearchUserResponse])
 def search_users(
     query: str = Query(..., min_length=1, max_length=100),
@@ -81,6 +182,7 @@ def search_users(
     users = (
         db.query(User)
         .filter(
+            User.id != current_user.id,
             or_(
                 User.username.ilike(f"%{query}%"),
                 User.email.ilike(f"%{query}%"),
@@ -96,16 +198,55 @@ def search_users(
     for user in users:
         print(f"   - {user.username} ({user.email})")
     
-    results = [
-        SearchUserResponse(
-            public_id=u.public_id,
-            username=u.username,
-            full_name=u.full_name,
-            profile_photo=u.profile_photo,
+    following_ids = {
+        row[0]
+        for row in db.query(Follow.following_id).filter(Follow.follower_id == current_user.id).all()
+        if row and row[0]
+    }
+
+    following_public_ids = set()
+    if current_user.public_id:
+        following_public_ids = {
+            row[0]
+            for row in db.query(Connection.following_id).filter(
+                Connection.follower_id == current_user.public_id,
+                Connection.status == "connected",
+            ).all()
+            if row and row[0]
+        }
+
+    results = []
+    for u in users:
+        if u.public_id is None:
+            continue
+
+        legacy_followers = db.query(func.count(Follow.id)).filter(
+            Follow.following_id == u.id
+        ).scalar() or 0
+
+        connection_followers = 0
+        if u.public_id:
+            connection_followers = db.query(func.count(Connection.id)).filter(
+                Connection.following_id == u.public_id,
+                Connection.status == "connected",
+            ).scalar() or 0
+
+        is_following = bool(
+            u.id in following_ids
+            or (u.public_id in following_public_ids if u.public_id else False)
         )
-        for u in users
-        if u.public_id is not None
-    ]
+
+        results.append(
+            SearchUserResponse(
+                id=u.id,
+                public_id=u.public_id,
+                username=u.username,
+                full_name=u.full_name,
+                profile_photo=u.profile_photo,
+                is_following=is_following,
+                followers_count=max(legacy_followers, connection_followers),
+            )
+        )
     
     print(f"   Returning {len(results)} results")
     return results
@@ -118,7 +259,7 @@ async def get_user_profile(
     db: AsyncSession = Depends(get_async_db)
 ):
     """Get full user profile with stats"""
-    me_public_id = await _ensure_public_id(current_user, db)
+    await _ensure_public_id(current_user, db)
     
     # Get user
     result = await db.execute(select(User).where(User.public_id == public_id))
@@ -132,35 +273,14 @@ async def get_user_profile(
         # 1. Posts count (using integer ID)
         posts_res = await db.execute(select(func.count(Post.id)).where(Post.author_id == user.id))
         posts_count = posts_res.scalar() or 0
-        
-        # 2. Followers count (using UUID public_id)
-        followers_res = await db.execute(
-            select(func.count(Connection.id)).where(
-                and_(Connection.following_id == public_id, Connection.status == "connected")
-            )
-        )
-        followers_count = followers_res.scalar() or 0
-        
-        # 3. Following count (using UUID public_id)
-        following_res = await db.execute(
-            select(func.count(Connection.id)).where(
-                and_(Connection.follower_id == public_id, Connection.status == "connected")
-            )
-        )
-        following_count = following_res.scalar() or 0
-        
+
+        # 2/3. Followers and following counts across both graph tables
+        followers_count = len(await _collect_followers_ids(db, user))
+        following_count = len(await _collect_following_ids(db, user))
+
         # 4. Is Following?
-        is_following_res = await db.execute(
-            select(Connection).where(
-                and_(
-                    Connection.follower_id == me_public_id, 
-                    Connection.following_id == public_id,
-                    Connection.status == "connected"
-                )
-            )
-        )
-        is_following = is_following_res.scalar_one_or_none() is not None
-        
+        is_following = await _is_following(db, current_user, user)
+
         return {
             "id": user.public_id,
             "username": user.username,
@@ -207,7 +327,7 @@ async def get_profile_by_username(
     Response must always return: { user, posts, projects, shorts, followers, following }
     """
     try:
-        me_public_id = await _ensure_public_id(current_user, db)
+        await _ensure_public_id(current_user, db)
         
         # 1. Fetch User
         result = await db.execute(select(User).where(User.username.ilike(username)))
@@ -223,35 +343,9 @@ async def get_profile_by_username(
         posts_count_q = await db.execute(select(func.count(Post.id)).where(Post.author_id == user.id))
         posts_count = posts_count_q.scalar() or 0
         
-        followers_count = 0
-        following_count = 0
-        is_following = False
-        
-        if user.public_id:
-            followers_res = await db.execute(
-                select(func.count(Connection.id)).where(
-                    and_(Connection.following_id == user.public_id, Connection.status == "connected")
-                )
-            )
-            followers_count = followers_res.scalar() or 0
-            
-            following_res = await db.execute(
-                select(func.count(Connection.id)).where(
-                    and_(Connection.follower_id == user.public_id, Connection.status == "connected")
-                )
-            )
-            following_count = following_res.scalar() or 0
-            
-            is_following_res = await db.execute(
-                select(Connection).where(
-                    and_(
-                        Connection.follower_id == me_public_id, 
-                        Connection.following_id == user.public_id,
-                        Connection.status == "connected"
-                    )
-                )
-            )
-            is_following = is_following_res.scalar_one_or_none() is not None
+        followers_count = len(await _collect_followers_ids(db, user))
+        following_count = len(await _collect_following_ids(db, user))
+        is_following = await _is_following(db, current_user, user)
 
         # 3. User Object
         user_data = {
@@ -330,6 +424,25 @@ async def get_profile_by_username(
         }
 
 
+@router.get("/profile/{public_id}/full")
+async def get_profile_full_by_public_id(
+    public_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Get complete profile payload using user's public UUID."""
+    result = await db.execute(select(User).where(User.public_id == public_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return await get_profile_by_username(
+        username=user.username,
+        current_user=current_user,
+        db=db,
+    )
+
+
 async def _get_or_create_conversation(db: AsyncSession, user_a: UUID, user_b: UUID) -> ConversationV2:
     a, b = _ordered_pair(user_a, user_b)
     existing = await db.execute(
@@ -376,6 +489,17 @@ async def connect_toggle(
         if conn_obj:
             # Unfollow: remove connection and conversation
             await db.delete(conn_obj)
+            legacy_follow = await db.execute(
+                select(Follow).where(
+                    and_(
+                        Follow.follower_id == current_user.id,
+                        Follow.following_id == target_user.id,
+                    )
+                )
+            )
+            legacy_follow_obj = legacy_follow.scalar_one_or_none()
+            if legacy_follow_obj:
+                await db.delete(legacy_follow_obj)
             a, b = _ordered_pair(me_public_id, target_public_id)
             conv_result = await db.execute(
                 select(ConversationV2).where(
@@ -393,6 +517,16 @@ async def connect_toggle(
                 status="connected",
             )
             db.add(new_conn)
+            legacy_follow = await db.execute(
+                select(Follow).where(
+                    and_(
+                        Follow.follower_id == current_user.id,
+                        Follow.following_id == target_user.id,
+                    )
+                )
+            )
+            if legacy_follow.scalar_one_or_none() is None:
+                db.add(Follow(follower_id=current_user.id, following_id=target_user.id))
             conv = await _get_or_create_conversation(db, me_public_id, target_public_id)
             conversation_id = conv.id
             await db.flush()
@@ -400,6 +534,7 @@ async def connect_toggle(
             trigger_notification = True
 
     await db.commit()
+    await invalidate_profile_cache([current_user.id, target_user.id])
 
     if trigger_notification:
          # target_user.id is integer ID needed for notification
