@@ -9,17 +9,28 @@ from .config import settings
 from typing import Dict, Any, Optional
 import os
 
-# Initialize Cloudinary with credentials
-cloudinary.config(
-    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
-    api_key=settings.CLOUDINARY_API_KEY,
-    api_secret=settings.CLOUDINARY_API_SECRET,
-    secure=True
+_CLOUDINARY_ENABLED = bool(
+    settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET
 )
+
+# Initialize Cloudinary only when credentials are configured.
+if _CLOUDINARY_ENABLED:
+    cloudinary.config(
+        cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+        api_key=settings.CLOUDINARY_API_KEY,
+        api_secret=settings.CLOUDINARY_API_SECRET,
+        secure=True
+    )
+else:
+    print("⚠️ Cloudinary credentials missing. Media upload features will be unavailable.")
 
 
 class CloudinaryService:
     """Service for handling Cloudinary uploads"""
+
+    @staticmethod
+    def _is_configured() -> bool:
+        return _CLOUDINARY_ENABLED
     
     @staticmethod
     async def upload_image(
@@ -40,6 +51,11 @@ class CloudinaryService:
         Returns:
             Dict with upload result including secure_url, public_id, etc.
         """
+        if not CloudinaryService._is_configured():
+            return {
+                'success': False,
+                'error': 'Cloudinary is not configured on server',
+            }
         try:
             # Default transformation for Instagram-like posts
             if transformation is None:
@@ -95,6 +111,11 @@ class CloudinaryService:
         Returns:
             Dict with upload result
         """
+        if not CloudinaryService._is_configured():
+            return {
+                'success': False,
+                'error': 'Cloudinary is not configured on server',
+            }
         try:
             # Default transformation for Instagram-like reels
             if transformation is None:
@@ -147,6 +168,11 @@ class CloudinaryService:
         Returns:
             Dict with upload result (secure_url, public_id, format)
         """
+        if not CloudinaryService._is_configured():
+            return {
+                'success': False,
+                'error': 'Cloudinary is not configured on server',
+            }
         try:
             result = cloudinary.uploader.upload(
                 file_content,
@@ -183,6 +209,8 @@ class CloudinaryService:
         Returns:
             True if successful, False otherwise
         """
+        if not CloudinaryService._is_configured():
+            return False
         try:
             result = cloudinary.uploader.destroy(
                 public_id,

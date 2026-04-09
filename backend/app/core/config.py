@@ -2,6 +2,7 @@
 Application configuration settings
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import Optional
 
 
@@ -35,15 +36,15 @@ class Settings(BaseSettings):
     AI_REQUEST_TIMEOUT_SECONDS: int = 18
     
     # Qdrant Cloud (Vector Database for Semantic Search)
-    QDRANT_URL: str  # Required: Qdrant Cloud cluster URL (e.g., https://xxx.qdrant.io)
-    QDRANT_API_KEY: str  # Required: Qdrant Cloud API key
+    QDRANT_URL: Optional[str] = None  # Optional at boot; required for semantic/vector features
+    QDRANT_API_KEY: Optional[str] = None  # Optional at boot; required for semantic/vector features
     QDRANT_COLLECTION_NAME: str = "netzeal_posts"
     VECTOR_SIZE: int = 384  # MiniLM-L6-v2 embedding size
     
     # Cloudinary (Media Storage)
-    CLOUDINARY_CLOUD_NAME: str
-    CLOUDINARY_API_KEY: str
-    CLOUDINARY_API_SECRET: str
+    CLOUDINARY_CLOUD_NAME: Optional[str] = None
+    CLOUDINARY_API_KEY: Optional[str] = None
+    CLOUDINARY_API_SECRET: Optional[str] = None
 
     # Google OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -98,6 +99,33 @@ class Settings(BaseSettings):
     BACKUP_DIR: str = "/tmp/netzeal_backups"
     BACKUP_RETENTION_DAYS: int = 7
     BACKUP_S3_BUCKET: Optional[str] = None
+
+    @field_validator(
+        "DEBUG",
+        "GZIP_ENABLED",
+        "CELERY_TASK_ALWAYS_EAGER",
+        "LIVE_STREAMING_ENABLED",
+        "SEMANTIC_FEATURES_ENABLED",
+        "EXPERIMENTAL_AI_ENABLED",
+        "FORCE_HTTPS",
+        "SECURE_RESPONSE_HEADERS",
+        "SMTP_USE_TLS",
+        mode="before",
+    )
+    @classmethod
+    def normalize_bool_env_values(cls, value):
+        """Accept common env aliases like release/production/debug/dev for bool flags."""
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on", "debug", "development", "dev"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off", "release", "production", "prod"}:
+                return False
+        return value
 
     @property
     def cors_origins_list(self) -> list[str]:
