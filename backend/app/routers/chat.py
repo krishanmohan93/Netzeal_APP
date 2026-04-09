@@ -29,6 +29,18 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+async def _is_conversation_participant(
+    db: AsyncSession, conversation_id: int, user_id: int
+) -> bool:
+    participant_result = await db.execute(
+        select(ConversationParticipant).where(
+            and_(
+                ConversationParticipant.conversation_id == conversation_id,
+                ConversationParticipant.user_id == user_id,
+            )
+        )
+    )
+    return participant_result.scalars().first() is not None
 
 # ===== Conversation Endpoints =====
 
@@ -57,7 +69,7 @@ async def create_conversation(
         
         other_user_id = data.participant_ids[0]
         
-        # Check existing direct conversation
+        # Candidate existing direct conversations containing both users
         existing = await db.execute(
             select(Conversation).join(ConversationParticipant).where(
                 and_(
@@ -65,12 +77,19 @@ async def create_conversation(
                     ConversationParticipant.user_id.in_([current_user.id, other_user_id])
                 )
             ).group_by(Conversation.id).having(
-                func.count(ConversationParticipant.user_id) == 2
+                func.count(func.distinct(ConversationParticipant.user_id)) == 2
             )
         )
-        existing_conv = existing.scalar_one_or_none()
-        if existing_conv:
-            return await get_conversation_details(existing_conv.id, current_user, db)
+        candidate_conversations = existing.scalars().all()
+        for candidate in candidate_conversations:
+            participants_check = await db.execute(
+                select(ConversationParticipant.user_id).where(
+                    ConversationParticipant.conversation_id == candidate.id
+                )
+            )
+            participant_ids = {row[0] for row in participants_check.all() if row and row[0]}
+            if participant_ids == {current_user.id, other_user_id}:
+                return await get_conversation_details(candidate.id, current_user, db)
     
     # Create conversation
     conversation = Conversation(
@@ -142,15 +161,7 @@ async def get_conversation(
 ):
     """Get conversation details"""
     # Check if user is participant
-    participant = await db.execute(
-        select(ConversationParticipant).where(
-            and_(
-                ConversationParticipant.conversation_id == conversation_id,
-                ConversationParticipant.user_id == current_user.id
-            )
-        )
-    )
-    if not participant.scalar_one_or_none():
+    if not await _is_conversation_participant(db, conversation_id, current_user.id):
         raise HTTPException(status_code=403, detail="Not a conversation participant")
     
     return await get_conversation_details(conversation_id, current_user, db)
@@ -213,7 +224,9 @@ async def get_conversation_details(
             )
         )
     )
-    current_part = current_participant.scalar_one()
+    current_part = current_participant.scalars().first()
+    if not current_part:
+        raise HTTPException(status_code=403, detail="Not a conversation participant")
     
     unread_count = 0
     if current_part.last_read_at:
@@ -268,15 +281,7 @@ async def get_messages(
     limit = min(max(limit, 1), 100)
 
     # Check participant
-    participant = await db.execute(
-        select(ConversationParticipant).where(
-            and_(
-                ConversationParticipant.conversation_id == conversation_id,
-                ConversationParticipant.user_id == current_user.id
-            )
-        )
-    )
-    if not participant.scalar_one_or_none():
+    if not await _is_conversation_participant(db, conversation_id, current_user.id):
         raise HTTPException(status_code=403, detail="Not a conversation participant")
     
     # Parse cursor
@@ -374,15 +379,7 @@ async def send_message(
     Supports replies and media uploads
     """
     # Check participant
-    participant = await db.execute(
-        select(ConversationParticipant).where(
-            and_(
-                ConversationParticipant.conversation_id == conversation_id,
-                ConversationParticipant.user_id == current_user.id
-            )
-        )
-    )
-    if not participant.scalar_one_or_none():
+    if not await _is_conversation_participant(db, conversation_id, current_user.id):
         raise HTTPException(status_code=403, detail="Not a conversation participant")
     
     # Upload media if provided
@@ -444,7 +441,9 @@ async def send_message(
     )
     conv = (await db.execute(
         select(Conversation).where(Conversation.id == conversation_id)
-    )).scalar_one()
+    )).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
     conv.last_message_at = datetime.utcnow()
     
     await db.commit()
@@ -635,9 +634,10 @@ async def mark_message_read(
                 ConversationParticipant.user_id == current_user.id
             )
         )
-    )).scalar_one()
-    participant.last_read_at = datetime.utcnow()
-    participant.last_seen_message_id = message_id
+    )).scalars().first()
+    if participant:
+        participant.last_read_at = datetime.utcnow()
+        participant.last_seen_message_id = message_id
     
     await db.commit()
     

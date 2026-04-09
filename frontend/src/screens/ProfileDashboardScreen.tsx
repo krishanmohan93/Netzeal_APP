@@ -125,6 +125,24 @@ const normalizeInternalUserId = (...values: any[]): number | null => {
   return null;
 };
 
+const extractApiErrorMessage = (error: any, fallback: string): string => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === 'object') {
+    const innerDetail = detail?.message || detail?.error || detail?.detail;
+    if (typeof innerDetail === 'string' && innerDetail.trim()) {
+      return innerDetail;
+    }
+  }
+  const message = error?.userMessage || error?.message;
+  if (typeof message === 'string' && message.trim()) {
+    return message;
+  }
+  return fallback;
+};
+
 const normalizeProfile = (
   data: any,
   fallback: UserProfile,
@@ -456,6 +474,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const [cvUploading, setCvUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserInternalId, setCurrentUserInternalId] = useState<number | null>(null);
+  const [currentUsername, setCurrentUsername] = useState<string>('');
   const [viewingUserId, setViewingUserId] = useState<string | null>(null); // For viewing other users
   const [viewingUserInternalId, setViewingUserInternalId] = useState<number | null>(null);
   const [isOwnProfile, setIsOwnProfile] = useState(true);
@@ -471,7 +491,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   useFocusEffect(
     useCallback(() => {
       loadUserData();
-    }, [paramUserId])
+    }, [paramUserId, paramUsername])
   );
 
   const loadUserData = async () => {
@@ -485,6 +505,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       const userDataStr = await AsyncStorage.getItem('userData');
       const legacyUserDataStr = await AsyncStorage.getItem('user_data');
       let loggedInUserId: string | null = null;
+      let loggedInUserInternalId: number | null = null;
+      let loggedInUsername = '';
       let storedUserData: any = null;
 
       if (userDataStr || legacyUserDataStr) {
@@ -496,23 +518,92 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           if (loggedInUserId) {
             setCurrentUserId(loggedInUserId);
           }
+          const resolvedInternalId = normalizeInternalUserId(
+            storedUserData?.id,
+            storedUserData?.user_id,
+            storedUserData?.userId
+          );
+          if (resolvedInternalId) {
+            setCurrentUserInternalId(resolvedInternalId);
+            loggedInUserInternalId = resolvedInternalId;
+          }
+          loggedInUsername = toSafeString(storedUserData?.username).trim().toLowerCase();
+          if (loggedInUsername) {
+            setCurrentUsername(loggedInUsername);
+          }
         } catch (parseError) {
           await AsyncStorage.removeItem('userData');
         }
       }
 
-      const viewingOtherUser = Boolean(paramUserId && paramUserId !== loggedInUserId);
+      // Storage can occasionally miss public_id/username; fetch auth profile once for reliable self checks.
+      if (!loggedInUserId || !loggedInUserInternalId || !loggedInUsername) {
+        try {
+          const latestUser = await authAPI.getCurrentUser();
+          if (latestUser) {
+            storedUserData = latestUser;
+
+            const resolvedPublicId = normalizeUserId(
+              latestUser?.public_id || latestUser?.id || latestUser?.user_id || latestUser?.userId
+            );
+            if (resolvedPublicId) {
+              loggedInUserId = resolvedPublicId;
+              setCurrentUserId(resolvedPublicId);
+            }
+
+            const resolvedInternalId = normalizeInternalUserId(
+              latestUser?.id,
+              latestUser?.user_id,
+              latestUser?.userId
+            );
+            if (resolvedInternalId) {
+              loggedInUserInternalId = resolvedInternalId;
+              setCurrentUserInternalId(resolvedInternalId);
+            }
+
+            const resolvedUsername = toSafeString(latestUser?.username).trim().toLowerCase();
+            if (resolvedUsername) {
+              loggedInUsername = resolvedUsername;
+              setCurrentUsername(resolvedUsername);
+            }
+
+            await AsyncStorage.setItem('userData', JSON.stringify(latestUser));
+            await AsyncStorage.setItem('user_data', JSON.stringify(latestUser));
+          }
+        } catch (identityError) {
+          // Keep best-effort identity from storage when network call fails.
+        }
+      }
+
+      const normalizedParamUsername = toSafeString(paramUsername).trim().toLowerCase();
+      const paramUserInternalId = normalizeInternalUserId(paramUserId);
+      const isSameByPublicId = Boolean(paramUserId && loggedInUserId && paramUserId === loggedInUserId);
+      const isSameByInternalId = Boolean(
+        paramUserInternalId &&
+        loggedInUserInternalId &&
+        paramUserInternalId === loggedInUserInternalId
+      );
+      const isSameByUsername = Boolean(
+        normalizedParamUsername &&
+        loggedInUsername &&
+        normalizedParamUsername === loggedInUsername
+      );
+
+      const viewingOtherUser = Boolean(
+        (paramUserId && !isSameByPublicId && !isSameByInternalId) ||
+        (!paramUserId && normalizedParamUsername && !isSameByUsername)
+      );
       const userIdToLoad = viewingOtherUser ? paramUserId : loggedInUserId;
 
-      if (viewingOtherUser && paramUserId) {
+      if (viewingOtherUser) {
         // Viewing another user's profile
         setIsOwnProfile(false);
-        setViewingUserId(paramUserId);
+        setViewingUserId(paramUserId || null);
         setViewingUserInternalId(null);
         setIsFollowing(false);
 
         try {
-          if (UUID_REGEX.test(paramUserId)) {
+          if (paramUserId && UUID_REGEX.test(paramUserId)) {
             const fullProfile = await socialAPI.getPublicProfileFull(paramUserId);
             if (!fullProfile?.user) {
               throw new Error('Empty profile response');
@@ -549,7 +640,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
               setLoading(false);
               loadedPostsFromFullProfile = true;
             }
-          } else {
+          } else if (paramUserId) {
             const otherUserProfile = await authAPI.getUserProfile(paramUserId);
             setProfile(
               normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
@@ -562,6 +653,47 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
               normalizeInternalUserId(otherUserProfile?.id, otherUserProfile?.user_id)
             );
             setIsFollowing(Boolean(otherUserProfile?.is_following));
+          } else if (paramUsername) {
+            const fullProfile = await socialAPI.getProfileByUsername(paramUsername);
+            if (!fullProfile?.user) {
+              throw new Error('Empty username profile response');
+            }
+
+            const otherUserProfile = fullProfile.user;
+            const resolvedPublicId = normalizeUserId(
+              otherUserProfile?.id || otherUserProfile?.public_id
+            );
+            setViewingUserId(resolvedPublicId || null);
+            setProfile(
+              normalizeProfile(otherUserProfile, EMPTY_PROFILE, {
+                id: resolvedPublicId || '',
+                username: toSafeString(otherUserProfile?.username || paramUsername || 'user'),
+                tagline: '',
+              })
+            );
+            setViewingUserInternalId(
+              normalizeInternalUserId(
+                otherUserProfile?.internal_id,
+                otherUserProfile?.user_id,
+                otherUserProfile?.id
+              )
+            );
+            setIsFollowing(Boolean(otherUserProfile?.is_following));
+
+            const projectCards = mapProjectsFromProfilePayload(fullProfile.projects || []);
+            setProjects(projectCards);
+            loadedProjectsFromFullProfile = projectCards.length > 0;
+
+            const profilePosts = [
+              ...(Array.isArray(fullProfile.posts) ? fullProfile.posts : []),
+              ...(Array.isArray(fullProfile.shorts) ? fullProfile.shorts : []),
+            ];
+            const normalizedPosts = normalizePostsPayload(profilePosts);
+            setUserPosts(normalizedPosts);
+            if (normalizedPosts.length > 0) {
+              setLoading(false);
+              loadedPostsFromFullProfile = true;
+            }
           }
         } catch (error) {
           setProfileError('Failed to load user profile');
@@ -593,6 +725,20 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
             if (resolvedUserId) {
               setCurrentUserId(resolvedUserId);
               setViewingUserId(resolvedUserId);
+            }
+            const resolvedInternalId = normalizeInternalUserId(
+              userData?.id,
+              userData?.user_id,
+              userData?.userId
+            );
+            if (resolvedInternalId) {
+              setCurrentUserInternalId(resolvedInternalId);
+              loggedInUserInternalId = resolvedInternalId;
+            }
+            const resolvedUsername = toSafeString(userData?.username).trim().toLowerCase();
+            if (resolvedUsername) {
+              setCurrentUsername(resolvedUsername);
+              loggedInUsername = resolvedUsername;
             }
             setProfile(normalizeProfile(userData, EMPTY_PROFILE));
           } else {
@@ -768,18 +914,56 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     navigation.navigate('CreatePost', { postToEdit: post });
   };
 
-  const handleMessagePress = useCallback(() => {
-    if (!viewingUserInternalId) {
+  const handleMessagePress = useCallback(async () => {
+    const isSameInternalUser = Boolean(
+      viewingUserInternalId && currentUserInternalId && viewingUserInternalId === currentUserInternalId
+    );
+    const isSamePublicUser = Boolean(
+      viewingUserId && currentUserId && String(viewingUserId) === String(currentUserId)
+    );
+
+    if (isSameInternalUser || isSamePublicUser) {
+      Alert.alert('Unavailable', 'You cannot message yourself.');
+      return;
+    }
+
+    let targetInternalId = viewingUserInternalId;
+    if (!targetInternalId && viewingUserId && UUID_REGEX.test(viewingUserId)) {
+      try {
+        const fullProfile = await socialAPI.getPublicProfileFull(viewingUserId);
+        const resolvedId = normalizeInternalUserId(
+          fullProfile?.user?.internal_id,
+          fullProfile?.user?.id,
+          fullProfile?.user?.user_id
+        );
+        if (resolvedId) {
+          targetInternalId = resolvedId;
+          setViewingUserInternalId(resolvedId);
+        }
+      } catch (error) {
+        // Keep graceful fallback below
+      }
+    }
+
+    if (!targetInternalId) {
       Alert.alert('Unavailable', 'Message is not available for this profile yet.');
       return;
     }
 
     navigation.navigate('Chat', {
-      userId: viewingUserInternalId,
+      userId: targetInternalId,
       username: profile?.username,
       conversationTitle: profile?.fullName || profile?.username || 'Chat',
     });
-  }, [navigation, viewingUserInternalId, profile?.username, profile?.fullName]);
+  }, [
+    navigation,
+    viewingUserInternalId,
+    viewingUserId,
+    currentUserInternalId,
+    currentUserId,
+    profile?.username,
+    profile?.fullName,
+  ]);
 
   const handleFollowToggle = useCallback(async () => {
     if (isOwnProfile || followLoading) {
@@ -788,6 +972,17 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
 
     const targetPublicId = viewingUserId;
     const targetInternalId = viewingUserInternalId;
+    const isSameInternalUser = Boolean(
+      targetInternalId && currentUserInternalId && targetInternalId === currentUserInternalId
+    );
+    const isSamePublicUser = Boolean(
+      targetPublicId && currentUserId && String(targetPublicId) === String(currentUserId)
+    );
+
+    if (isSameInternalUser || isSamePublicUser) {
+      Alert.alert('Unavailable', 'You cannot follow yourself.');
+      return;
+    }
 
     if (!targetPublicId && !targetInternalId) {
       Alert.alert('Error', 'Unable to update follow status for this user.');
@@ -809,32 +1004,53 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     );
 
     try {
-      if (targetPublicId && UUID_REGEX.test(targetPublicId)) {
-        await socialAPI.toggleConnection(targetPublicId);
-      } else if (targetInternalId) {
+      if (targetInternalId) {
         if (wasFollowing) {
           await socialAPI.unfollowUser(targetInternalId);
         } else {
           await socialAPI.followUser(targetInternalId);
         }
+      } else if (targetPublicId && UUID_REGEX.test(targetPublicId)) {
+        await socialAPI.toggleConnection(targetPublicId);
       } else {
         throw new Error('No valid user id for follow action');
       }
     } catch (error) {
-      setIsFollowing(wasFollowing);
-      setProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              peers: Math.max(0, (Number(prev.peers) || 0) - followerDelta),
-            }
-          : prev
-      );
-      Alert.alert('Error', 'Failed to update follow status.');
+      // Fallback: if internal-id API failed but public UUID exists, try graph toggle once.
+      let resolved = false;
+      if (targetPublicId && UUID_REGEX.test(targetPublicId) && targetInternalId) {
+        try {
+          await socialAPI.toggleConnection(targetPublicId);
+          resolved = true;
+        } catch (fallbackError) {
+          resolved = false;
+        }
+      }
+
+      if (!resolved) {
+        setIsFollowing(wasFollowing);
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                peers: Math.max(0, (Number(prev.peers) || 0) - followerDelta),
+              }
+            : prev
+        );
+        Alert.alert('Error', extractApiErrorMessage(error, 'Failed to update follow status.'));
+      }
     } finally {
       setFollowLoading(false);
     }
-  }, [isOwnProfile, followLoading, isFollowing, viewingUserId, viewingUserInternalId]);
+  }, [
+    isOwnProfile,
+    followLoading,
+    isFollowing,
+    viewingUserId,
+    viewingUserInternalId,
+    currentUserInternalId,
+    currentUserId,
+  ]);
 
   const handleCVUpload = async () => {
     try {
@@ -933,10 +1149,60 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const displayName = displayProfile.fullName || displayProfile.username || 'User';
   const displayTagline = displayProfile.tagline || '';
   const displayBio = displayProfile.bio || '';
+  const normalizedDisplayUsername = toSafeString(displayProfile.username).trim().toLowerCase();
+  const displayProfilePublicId = normalizeUserId(displayProfile.id);
+  const displayProfileInternalId = normalizeInternalUserId(
+    (profile as any)?.internal_id,
+    (profile as any)?.user_id,
+    (profile as any)?.id,
+    viewingUserInternalId
+  );
+  const normalizedParamUsername = toSafeString(paramUsername).trim().toLowerCase();
+  const paramInternalId = normalizeInternalUserId(paramUserId);
+  const isSameByPublicRoute = Boolean(
+    paramUserId && currentUserId && String(paramUserId) === String(currentUserId)
+  );
+  const isSameByInternalRoute = Boolean(
+    paramInternalId && currentUserInternalId && paramInternalId === currentUserInternalId
+  );
+  const isSameByUsernameRoute = Boolean(
+    normalizedParamUsername &&
+    currentUsername &&
+    normalizedParamUsername === currentUsername
+  );
+  const isOtherProfileByRoute = Boolean(
+    (paramUserId && !isSameByPublicRoute && !isSameByInternalRoute) ||
+    (!paramUserId && normalizedParamUsername && !isSameByUsernameRoute)
+  );
+  const isSameInternalUser = Boolean(
+    viewingUserInternalId && currentUserInternalId && viewingUserInternalId === currentUserInternalId
+  );
+  const isSamePublicUser = Boolean(
+    viewingUserId && currentUserId && String(viewingUserId) === String(currentUserId)
+  );
+  const isSameByDisplayedPublicId = Boolean(
+    displayProfilePublicId && currentUserId && String(displayProfilePublicId) === String(currentUserId)
+  );
+  const isSameByDisplayedInternalId = Boolean(
+    displayProfileInternalId && currentUserInternalId && displayProfileInternalId === currentUserInternalId
+  );
+  const isSameByDisplayedUsername = Boolean(
+    normalizedDisplayUsername &&
+    currentUsername &&
+    normalizedDisplayUsername === currentUsername
+  );
+  const isActuallyOwnProfile =
+    isOwnProfile ||
+    isSameInternalUser ||
+    isSamePublicUser ||
+    isSameByPublicRoute ||
+    isSameByInternalRoute ||
+    isSameByUsernameRoute ||
+    isSameByDisplayedPublicId ||
+    isSameByDisplayedInternalId ||
+    isSameByDisplayedUsername;
+  const showSocialActions = !isActuallyOwnProfile && isOtherProfileByRoute;
   const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
-  const isOtherProfileByRoute =
-    Boolean(paramUserId) && (!currentUserId || String(paramUserId) !== String(currentUserId));
-  const showSocialActions = canGoBack || !isOwnProfile || isOtherProfileByRoute;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -944,7 +1210,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
         {/* Header with background */}
         <View style={styles.headerBackground}>
           <View style={styles.headerContent}>
-            {showSocialActions && (
+            {showSocialActions && canGoBack && (
               <TouchableOpacity
                 style={styles.backButton}
                 onPress={() => navigation.goBack()}

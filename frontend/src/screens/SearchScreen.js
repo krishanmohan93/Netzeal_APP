@@ -14,9 +14,10 @@ import {
   Dimensions,
   SafeAreaView
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius, typography } from '../utils/theme';
-import api, { socialAPI } from '../services/api';
+import api, { authAPI, socialAPI } from '../services/api';
 import { normalizeUri } from '../utils/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -28,6 +29,25 @@ const TABS = [
   { id: 'projects', label: 'Projects' },
 ];
 
+const toSafeString = (value) => (value === null || value === undefined ? '' : String(value).trim());
+
+const normalizeInternalUserId = (...values) => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed);
+    }
+  }
+  return null;
+};
+
+const buildUserIdentity = (source = {}) => ({
+  publicId: toSafeString(source.public_id || source.publicId) || null,
+  internalId: normalizeInternalUserId(source.id, source.user_id, source.userId),
+  username: toSafeString(source.username).toLowerCase(),
+});
+
 const SearchScreen = ({ navigation }) => {
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState('people');
@@ -35,6 +55,11 @@ const SearchScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [searchTimeout, setSearchTimeout] = useState(null);
   const [followPendingMap, setFollowPendingMap] = useState({});
+  const [currentUserIdentity, setCurrentUserIdentity] = useState({
+    publicId: null,
+    internalId: null,
+    username: '',
+  });
 
   // Focus effect to possibly clear or refresh? No, keep state.
 
@@ -116,6 +141,92 @@ const SearchScreen = ({ navigation }) => {
     }
   }, [activeTab, query, performSearch]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadCurrentUserIdentity = async () => {
+      let resolvedIdentity = { publicId: null, internalId: null, username: '' };
+
+      try {
+        const rawUserData = await AsyncStorage.getItem('userData');
+        const rawLegacyUserData = await AsyncStorage.getItem('user_data');
+        const storedPayload = rawUserData || rawLegacyUserData;
+
+        if (storedPayload) {
+          const storedUser = JSON.parse(storedPayload);
+          resolvedIdentity = buildUserIdentity(storedUser);
+        }
+      } catch (error) {
+        // Non-blocking: fallback to API below.
+      }
+
+      if (!resolvedIdentity.publicId || !resolvedIdentity.internalId || !resolvedIdentity.username) {
+        try {
+          const latestUser = await authAPI.getCurrentUser();
+          const apiIdentity = buildUserIdentity(latestUser || {});
+          resolvedIdentity = {
+            publicId: apiIdentity.publicId || resolvedIdentity.publicId,
+            internalId: apiIdentity.internalId || resolvedIdentity.internalId,
+            username: apiIdentity.username || resolvedIdentity.username,
+          };
+
+          if (latestUser) {
+            await AsyncStorage.setItem('userData', JSON.stringify(latestUser));
+            await AsyncStorage.setItem('user_data', JSON.stringify(latestUser));
+          }
+        } catch (error) {
+          // Keep best available identity from storage.
+        }
+      }
+
+      if (isMounted) {
+        setCurrentUserIdentity(resolvedIdentity);
+      }
+    };
+
+    loadCurrentUserIdentity();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const isCurrentUser = useCallback(
+    (user) => {
+      if (!user) return false;
+
+      const userPublicId = toSafeString(user.public_id || user.publicId) || null;
+      const userInternalId = normalizeInternalUserId(user.id, user.user_id, user.userId);
+      const userUsername = toSafeString(user.username).toLowerCase();
+
+      if (
+        currentUserIdentity.publicId &&
+        userPublicId &&
+        currentUserIdentity.publicId === userPublicId
+      ) {
+        return true;
+      }
+
+      if (
+        currentUserIdentity.internalId &&
+        userInternalId &&
+        currentUserIdentity.internalId === userInternalId
+      ) {
+        return true;
+      }
+
+      if (
+        currentUserIdentity.username &&
+        userUsername &&
+        currentUserIdentity.username === userUsername
+      ) {
+        return true;
+      }
+
+      return false;
+    },
+    [currentUserIdentity]
+  );
+
   const handleUserPress = (user) => {
     if (user.public_id) {
       // Navigate to ProfileDashboard with userId to view other user's profile
@@ -128,6 +239,10 @@ const SearchScreen = ({ navigation }) => {
   };
 
   const handleFollowToggle = async (user) => {
+    if (isCurrentUser(user)) {
+      return;
+    }
+
     const userKey = user.public_id || user.id;
     if (!userKey || followPendingMap[userKey]) {
       return;
@@ -188,6 +303,7 @@ const SearchScreen = ({ navigation }) => {
     const userKey = item.public_id || item.id;
     const followPending = Boolean(userKey && followPendingMap[userKey]);
     const isFollowing = Boolean(item.is_following);
+    const isSelfUser = isCurrentUser(item);
 
     return (
       <TouchableOpacity style={styles.userItem} onPress={() => handleUserPress(item)}>
@@ -204,22 +320,26 @@ const SearchScreen = ({ navigation }) => {
           <Text style={styles.userName}>{name}</Text>
           <Text style={styles.userHandle}>@{username}</Text>
         </View>
-        <TouchableOpacity
-          style={[
-            styles.followButton,
-            isFollowing && styles.followingButton,
-            followPending && styles.followButtonDisabled,
-          ]}
-          onPress={(event) => {
-            event?.stopPropagation?.();
-            handleFollowToggle(item);
-          }}
-          disabled={followPending}
-        >
-          <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
-            {isFollowing ? 'Following' : 'Follow'}
-          </Text>
-        </TouchableOpacity>
+        {!isSelfUser ? (
+          <TouchableOpacity
+            style={[
+              styles.followButton,
+              isFollowing && styles.followingButton,
+              followPending && styles.followButtonDisabled,
+            ]}
+            onPress={(event) => {
+              event?.stopPropagation?.();
+              handleFollowToggle(item);
+            }}
+            disabled={followPending}
+          >
+            <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
+              {isFollowing ? 'Following' : 'Follow'}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.followButtonSpacer} />
+        )}
       </TouchableOpacity>
     );
   };
@@ -462,6 +582,10 @@ const styles = StyleSheet.create({
   },
   followButtonDisabled: {
     opacity: 0.65,
+  },
+  followButtonSpacer: {
+    minWidth: 86,
+    height: 34,
   },
   userName: {
     fontWeight: '600',
