@@ -484,14 +484,25 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   const [fullscreen, setFullscreen] = useState({ visible: false, items: [], index: 0 });
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Get userId from route params if viewing another user's profile
-  const paramUserId = normalizeUserId(route?.params?.userId);
-  const paramUsername = toSafeString(route?.params?.username);
+  // This component is mounted for both tab route ("Profile") and stack route ("ProfileDashboard").
+  // On tab route we must always show current user's own profile, even if stale params exist.
+  const isTabProfileRoute = route?.name === 'Profile';
+  const rawParamUserId = normalizeUserId(route?.params?.userId);
+  const rawParamUsername = toSafeString(route?.params?.username);
+  const paramUserId = isTabProfileRoute ? null : rawParamUserId;
+  const paramUsername = isTabProfileRoute ? '' : rawParamUsername;
 
   useFocusEffect(
     useCallback(() => {
+      if (
+        isTabProfileRoute &&
+        (rawParamUserId || rawParamUsername) &&
+        typeof navigation?.setParams === 'function'
+      ) {
+        navigation.setParams({ userId: undefined, username: undefined });
+      }
       loadUserData();
-    }, [paramUserId, paramUsername])
+    }, [navigation, isTabProfileRoute, rawParamUserId, rawParamUsername, paramUserId, paramUsername])
   );
 
   const loadUserData = async () => {
@@ -1201,7 +1212,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     isSameByDisplayedPublicId ||
     isSameByDisplayedInternalId ||
     isSameByDisplayedUsername;
-  const showSocialActions = !isActuallyOwnProfile && isOtherProfileByRoute;
+  const showSocialActions = !isTabProfileRoute && !isActuallyOwnProfile && isOtherProfileByRoute;
   const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
 
   return (
