@@ -50,6 +50,10 @@ services:
         value: "true"
       - key: REQUEST_TIMEOUT_SECONDS
         value: "30"
+      - key: DB_CONNECT_TIMEOUT_SECONDS
+        value: "12"
+      - key: DB_COMMAND_TIMEOUT_SECONDS
+        value: "30"
       - key: MAX_REQUEST_SIZE_BYTES
         value: "10485760"
       - key: FORCE_HTTPS

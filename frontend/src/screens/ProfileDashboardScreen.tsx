@@ -158,7 +158,7 @@ const normalizeProfile = (
 
   return {
     id: toSafeString(
-      source.public_id || source.id || source.user_id || source.userId || fallback.id || 'unknown'
+      source.public_id || source.id || source.user_id || source.userId || fallback.id || ''
     ),
     username,
     fullName,
@@ -926,6 +926,12 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
   };
 
   const handleMessagePress = useCallback(async () => {
+    const normalizedProfileUsername = toSafeString(profile?.username).trim().toLowerCase();
+    const isSameByUsername = Boolean(
+      normalizedProfileUsername &&
+      currentUsername &&
+      normalizedProfileUsername === currentUsername
+    );
     const isSameInternalUser = Boolean(
       viewingUserInternalId && currentUserInternalId && viewingUserInternalId === currentUserInternalId
     );
@@ -933,7 +939,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       viewingUserId && currentUserId && String(viewingUserId) === String(currentUserId)
     );
 
-    if (isSameInternalUser || isSamePublicUser) {
+    if (isOwnProfile || isSameInternalUser || isSamePublicUser || isSameByUsername) {
       Alert.alert('Unavailable', 'You cannot message yourself.');
       return;
     }
@@ -972,17 +978,21 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     viewingUserId,
     currentUserInternalId,
     currentUserId,
+    currentUsername,
+    isOwnProfile,
     profile?.username,
     profile?.fullName,
   ]);
 
   const handleFollowToggle = useCallback(async () => {
-    if (isOwnProfile || followLoading) {
-      return;
-    }
-
     const targetPublicId = viewingUserId;
     const targetInternalId = viewingUserInternalId;
+    const normalizedProfileUsername = toSafeString(profile?.username).trim().toLowerCase();
+    const isSameByUsername = Boolean(
+      normalizedProfileUsername &&
+      currentUsername &&
+      normalizedProfileUsername === currentUsername
+    );
     const isSameInternalUser = Boolean(
       targetInternalId && currentUserInternalId && targetInternalId === currentUserInternalId
     );
@@ -990,7 +1000,11 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
       targetPublicId && currentUserId && String(targetPublicId) === String(currentUserId)
     );
 
-    if (isSameInternalUser || isSamePublicUser) {
+    if (followLoading) {
+      return;
+    }
+
+    if (isOwnProfile || isSameInternalUser || isSamePublicUser || isSameByUsername) {
       Alert.alert('Unavailable', 'You cannot follow yourself.');
       return;
     }
@@ -1061,6 +1075,8 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     viewingUserInternalId,
     currentUserInternalId,
     currentUserId,
+    currentUsername,
+    profile?.username,
   ]);
 
   const handleCVUpload = async () => {
@@ -1212,6 +1228,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     isSameByDisplayedPublicId ||
     isSameByDisplayedInternalId ||
     isSameByDisplayedUsername;
+  const showOwnProfileControls = isActuallyOwnProfile;
   const showSocialActions = !isTabProfileRoute && !isActuallyOwnProfile && isOtherProfileByRoute;
   const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
 
@@ -1234,7 +1251,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
               style={styles.headerLogo}
               resizeMode="contain"
             />
-            {isOwnProfile && (
+            {showOwnProfileControls && (
               <TouchableOpacity
                 style={styles.settingsButton}
                 onPress={() => navigation.navigate('Settings')}
@@ -1327,7 +1344,7 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           )}
 
           {/* Experience List - Only show for own profile */}
-          {isOwnProfile && experience.length > 0 && (
+          {showOwnProfileControls && experience.length > 0 && (
             <ExperienceList
               title="Portfolio & Experience"
               experiences={experience}
@@ -1371,11 +1388,11 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
           )}
 
           {/* Space for sticky CV card */}
-          {isOwnProfile && <View style={styles.cvCardSpacer} />}
+          {showOwnProfileControls && <View style={styles.cvCardSpacer} />}
         </ScrollView>
 
         {/* Sticky CV Upload Card - Only show for own profile */}
-        {isOwnProfile && <CVUploadCard onPress={handleCVUpload} isSticky loading={cvUploading} />}
+        {showOwnProfileControls && <CVUploadCard onPress={handleCVUpload} isSticky loading={cvUploading} />}
 
         {/* Fullscreen Media Viewer */}
         <FullscreenMediaViewer

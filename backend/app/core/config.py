@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_TIMEOUT_SECONDS: int = 30
     DB_POOL_RECYCLE_SECONDS: int = 1800
+    DB_CONNECT_TIMEOUT_SECONDS: int = 12
+    DB_COMMAND_TIMEOUT_SECONDS: int = 30
     REDIS_URL: Optional[str] = None
     CELERY_BROKER_URL: Optional[str] = None
     CELERY_RESULT_BACKEND: Optional[str] = None

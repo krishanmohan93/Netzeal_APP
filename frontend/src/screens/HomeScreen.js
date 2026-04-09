@@ -42,82 +42,6 @@ const mergeUniquePosts = (existing, incoming) => {
   return additions.length ? [...existing, ...additions] : existing;
 };
 
-// Dummy data for posts
-const DUMMY_POSTS = [
-  {
-    id: 1,
-    title: 'Innovations in AI',
-    description:
-      'YouTube and Canadian Work of footing as the salofaner anti-intelligence refreshment AI Lingt of infographs. #AI #Innovation',
-    coverImage:
-      'https://images.unsplash.com/photo-1677442136019-21780ecad995?w=800&q=80',
-    author: {
-      name: 'Alex Chen',
-      username: 'alexchen',
-      avatar: 'AC',
-      title: 'Exploring long and Inxoplances. Most allemmes',
-    },
-    likes: 234,
-    comments: 45,
-    isLiked: false,
-    timestamp: '2h ago',
-  },
-  {
-    id: 2,
-    title: 'Leadership Strategies',
-    description:
-      'AI insights the effective building and fosterial nativeests landeating and orths barrea CareerGrowth #AI io insperiled',
-    coverImage:
-      'https://images.unsplash.com/photo-1552664730-d307ca884978?w=800&q=80',
-    author: {
-      name: 'Sophia Lee',
-      username: 'sophialee',
-      avatar: 'SL',
-      title: 'Employora & Growth | Enollasified',
-    },
-    likes: 456,
-    comments: 89,
-    isLiked: true,
-    timestamp: '5h ago',
-  },
-  {
-    id: 3,
-    title: 'Data Science Trends 2024',
-    description:
-      'The latest trends in data science and machine learning that are shaping the future of technology. #DataScience #ML',
-    coverImage:
-      'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&q=80',
-    author: {
-      name: 'Michael Zhang',
-      username: 'mzhang',
-      avatar: 'MZ',
-      title: 'Data Scientist | AI Enthusiast',
-    },
-    likes: 567,
-    comments: 92,
-    isLiked: false,
-    timestamp: '1d ago',
-  },
-  {
-    id: 4,
-    title: 'Building Scalable Systems',
-    description:
-      'Best practices for designing and implementing scalable cloud architectures. #CloudComputing #DevOps',
-    coverImage:
-      'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=800&q=80',
-    author: {
-      name: 'Emma Johnson',
-      username: 'emmaj',
-      avatar: 'EJ',
-      title: 'Senior Software Engineer',
-    },
-    likes: 342,
-    comments: 67,
-    isLiked: false,
-    timestamp: '2d ago',
-  },
-];
-
 const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit, currentUserId, onOpenFullscreen, likePending, commentPending }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
@@ -125,7 +49,7 @@ const PostCard = ({ post, onLike, onComment, onShare, onRepost, onDelete, onEdit
   const [isPlaying, setIsPlaying] = useState(true);
   const videoRef = useRef(null);
 
-  // Handle both API format and dummy data format
+  // Handle API feed format
   const hasCarousel = Array.isArray(post.media_items) && post.media_items.length > 0;
   const mediaUrl = normalizeUri(post.media_url || post.coverImage);
   const mediaType = post.media_type || (post.type === 'reel' ? 'video' : 'image');
@@ -358,6 +282,7 @@ const HomeScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [feedError, setFeedError] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [fullscreen, setFullscreen] = useState({ visible: false, items: [], index: 0 });
 
@@ -424,8 +349,10 @@ const HomeScreen = ({ navigation }) => {
 
   const loadInitialFeed = async () => {
     try {
+      setFeedError(null);
       const resp = await contentAPI.getCursorFeed(null, 20);
-      setPosts(resp.items);
+      const initialItems = Array.isArray(resp?.items) ? resp.items : [];
+      setPosts(initialItems);
       const cursor = resp.next_cursor || null;
       setNextCursor(cursor);
       prefetchedPageRef.current = null;
@@ -435,11 +362,13 @@ const HomeScreen = ({ navigation }) => {
       if (error.response?.status === 401) {
         setPosts([]);
         setNextCursor(null);
+        setFeedError(null);
         prefetchedPageRef.current = null;
         return;
       }
-      setPosts((prev) => (prev.length ? prev : DUMMY_POSTS));
+      setPosts([]);
       setNextCursor(null);
+      setFeedError(getUserFacingError(error, 'Unable to load feed right now. Pull to refresh.'));
       prefetchedPageRef.current = null;
     } finally {
       setLoading(false);
@@ -751,7 +680,7 @@ const HomeScreen = ({ navigation }) => {
     <View style={styles.container}>
       <FlatList
         data={posts}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item, index) => String(item?.id ?? `feed-${index}`)}
         renderItem={({ item }) => (
           <PostCard
             post={item}
@@ -788,10 +717,10 @@ const HomeScreen = ({ navigation }) => {
           <View style={{ padding: 40, alignItems: 'center', justifyContent: 'center' }}>
             <Icon name="people-outline" size={80} color={colors.textLight} />
             <Text style={{ marginTop: 24, fontSize: 20, fontWeight: '600', color: colors.text, textAlign: 'center' }}>
-              Your Feed is Empty
+              {feedError ? 'Unable to Load Feed' : 'Your Feed is Empty'}
             </Text>
             <Text style={{ marginTop: 12, fontSize: 15, color: colors.textSecondary, textAlign: 'center', paddingHorizontal: 20, lineHeight: 22 }}>
-              Follow users to start seeing their posts in your feed
+              {feedError || 'Follow users to start seeing their posts in your feed'}
             </Text>
             <TouchableOpacity
               style={{
@@ -804,12 +733,18 @@ const HomeScreen = ({ navigation }) => {
                 alignItems: 'center',
                 gap: 8
               }}
-              onPress={() => navigation.navigate('Search')}
+              onPress={() => {
+                if (feedError) {
+                  handleRefresh();
+                } else {
+                  navigation.navigate('Search');
+                }
+              }}
               disabled={refreshing || loadingMore}
             >
-              <Icon name="search" size={20} color="#FFFFFF" />
+              <Icon name={feedError ? 'refresh' : 'search'} size={20} color="#FFFFFF" />
               <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600' }}>
-                Find People to Follow
+                {feedError ? 'Retry Feed' : 'Find People to Follow'}
               </Text>
             </TouchableOpacity>
           </View>

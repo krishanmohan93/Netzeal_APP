@@ -1,68 +1,4 @@
-"""
-Content models for posts, articles, and media
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  - Google native client config changes  - package name/scheme  - app icons/splash/native plugins- Rebuild required for native config changes:- Use EAS update for JS/UI-only changes.## OTA Updates5. Upload generated AAB to Play Console.4. Run `eas build --platform android --profile production`.3. Set Google client IDs in Expo env.2. Set `EXPO_PUBLIC_API_BASE_URL=https://netzeal-app-1.onrender.com/api/v1`.1. Confirm `app.json` has `scheme: "netzeal"` and Android package.## Build Android App (Expo/EAS)5. Validate Google sign-in and forgot/reset password flow.4. Validate `/health`, `/health/ready`, `/api/v1/ping`.3. Trigger manual deploy.2. Set all env vars in Render dashboard.1. Push code to `main`.## Deploy Backend (Render)- `ALLOWED_HOSTS=netzeal-app-1.onrender.com,*.onrender.com,api.netzeal.com,netzeal.in,www.netzeal.in`- `CORS_ORIGINS=https://netzeal.in,https://www.netzeal.in,https://auth.expo.io,exp://`## CORS / Hosts- `SMTP_USE_TLS`- `SMTP_FROM_EMAIL`- `SMTP_PASSWORD`- `SMTP_USERNAME`- `SMTP_PORT`- `SMTP_HOST`- `QDRANT_API_KEY`- `QDRANT_URL`- `NVIDIA_CHAT_MODEL`- `NVIDIA_API_BASE_URL`- `NVIDIA_API_KEY`- `CLOUDINARY_API_SECRET`- `CLOUDINARY_API_KEY`- `CLOUDINARY_CLOUD_NAME`- `GOOGLE_CLIENT_SECRET`- `GOOGLE_IOS_CLIENT_ID` (recommended)- `GOOGLE_ANDROID_CLIENT_ID` (recommended)- `GOOGLE_CLIENT_ID`- `FRONTEND_BASE_URL` (mobile deep-link: `netzeal://auth`)- `DEBUG=False`- `SECRET_KEY`- `DATABASE_URL`## Required Environment Variables  - `POST /api/v1/auth/google/mobile-callback`- Google mobile callback endpoint:- Optional dev callback: `exp://...`- Mobile deep-link base: `netzeal://auth`## OAuth Redirect  - `/api/v1/ping`  - `/health/ready`  - `/health`- Public checks:- Primary API: `https://netzeal-app-1.onrender.com`## Backend URL"""
+"""Content models for posts, articles, and media."""
 from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, JSON, Boolean, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -342,3 +278,4 @@ class Bookmark(Base):
     
     def __repr__(self):
         return f"<Bookmark by User {self.user_id} on Post {self.post_id}>"
+
