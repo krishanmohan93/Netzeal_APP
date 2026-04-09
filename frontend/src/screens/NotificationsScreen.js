@@ -15,6 +15,33 @@ import { colors } from '../utils/theme';
 import { normalizeUri } from '../utils/media';
 import { getUserFacingError } from '../utils/errorMessages';
 
+const normalizeNotificationsPayload = (payload) => {
+  if (Array.isArray(payload)) {
+    return payload.filter(Boolean);
+  }
+  if (Array.isArray(payload?.items)) {
+    return payload.items.filter(Boolean);
+  }
+  if (Array.isArray(payload?.notifications)) {
+    return payload.notifications.filter(Boolean);
+  }
+  return [];
+};
+
+const formatNotificationDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toLocaleDateString();
+};
+
+const getSenderInitials = (sender) => {
+  const raw = sender?.username || 'U';
+  return String(raw).slice(0, 2).toUpperCase();
+};
+
 const NotificationsScreen = () => {
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState([]);
@@ -28,7 +55,7 @@ const NotificationsScreen = () => {
     try {
       setError(null);
       const data = await notificationsAPI.list();
-      setNotifications(data || []);
+      setNotifications(normalizeNotificationsPayload(data));
     } catch (error) {
       setError(getUserFacingError(error, 'Could not load notifications. Please try again.'));
     } finally {
@@ -82,17 +109,23 @@ const NotificationsScreen = () => {
       disabled={pendingReadId === item.id}
     >
       <View style={styles.avatarContainer}>
-        <Image
-          source={{ uri: normalizeUri(item.sender?.profile_photo) || 'https://via.placeholder.com/50' }}
-          style={styles.avatar}
-        />
+        {normalizeUri(item.sender?.profile_photo) ? (
+          <Image
+            source={{ uri: normalizeUri(item.sender?.profile_photo) }}
+            style={styles.avatar}
+          />
+        ) : (
+          <View style={[styles.avatar, styles.avatarFallback]}>
+            <Text style={styles.avatarFallbackText}>{getSenderInitials(item.sender)}</Text>
+          </View>
+        )}
       </View>
       <View style={[styles.content, pendingReadId === item.id && { opacity: 0.6 }]}>
         <Text style={styles.text}>
-          <Text style={styles.username}>{item.sender?.username} </Text>
+          <Text style={styles.username}>{item.sender?.username || 'NetZeal'} </Text>
           {item.text || 'New notification'}
         </Text>
-        <Text style={styles.time}>{new Date(item.created_at).toLocaleDateString()}</Text>
+        <Text style={styles.time}>{formatNotificationDate(item.created_at)}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -123,18 +156,25 @@ const NotificationsScreen = () => {
     );
   }
 
+  if (notifications.length === 0) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.center}>
+          <Text style={styles.emptyText}>No notifications yet</Text>
+          <Text style={styles.emptySubText}>Follow, like, and comment activity will appear here.</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <FlatList
         data={notifications}
         renderItem={renderItem}
-        keyExtractor={item => item.id.toString()}
+        keyExtractor={(item, index) => String(item?.id ?? `notification-${index}`)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={
-          <View style={styles.center}>
-            <Text style={styles.emptyText}>No notifications yet</Text>
-          </View>
-        }
+        contentContainerStyle={styles.listContent}
       />
     </View>
   );
@@ -150,6 +190,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  listContent: {
+    paddingBottom: 12,
   },
   item: {
     flexDirection: 'row',
@@ -174,6 +217,16 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     backgroundColor: '#ddd',
   },
+  avatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#d9d9d9',
+  },
+  avatarFallbackText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   content: {
     flex: 1,
     justifyContent: 'center',
@@ -195,6 +248,13 @@ const styles = StyleSheet.create({
   emptyText: {
     color: '#999',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  emptySubText: {
+    marginTop: 8,
+    color: '#b3b3b3',
+    fontSize: 13,
+    textAlign: 'center',
   },
   retryButton: {
     marginTop: 14,
