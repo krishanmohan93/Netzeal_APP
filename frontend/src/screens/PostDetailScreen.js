@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,26 @@ const getFirstMediaUrl = (post) => {
     post?.image_url ||
     (Array.isArray(post?.media_urls) ? post.media_urls[0] : null);
   return normalizeUri(primary || '');
+};
+
+const buildCommentTree = (comments) => {
+  const map = new Map();
+  comments.forEach((c) => {
+    map.set(c.id, { ...c, replies: [] });
+  });
+  const roots = [];
+  map.forEach((c) => {
+    if (c.parent_id && map.has(c.parent_id)) {
+      map.get(c.parent_id).replies.push(c);
+    } else {
+      roots.push(c);
+    }
+  });
+
+  const sortByDateDesc = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  roots.sort(sortByDateDesc);
+  roots.forEach((c) => c.replies.sort(sortByDateDesc));
+  return roots;
 };
 
 const PostDetailScreen = ({ route }) => {
@@ -323,64 +343,43 @@ const PostDetailScreen = ({ route }) => {
     }
   };
 
-  const commentTree = useMemo(() => {
-    const map = new Map();
-    comments.forEach((c) => {
-      map.set(c.id, { ...c, replies: [] });
-    });
-    const roots = [];
-    map.forEach((c) => {
-      if (c.parent_id && map.has(c.parent_id)) {
-        map.get(c.parent_id).replies.push(c);
-      } else {
-        roots.push(c);
-      }
-    });
+  const commentTree = buildCommentTree(comments);
 
-    const sortByDateDesc = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
-    roots.sort(sortByDateDesc);
-    roots.forEach((c) => c.replies.sort(sortByDateDesc));
-    return roots;
-  }, [comments]);
-
-  const headerComponent = useMemo(
-    () => (
-      <View style={styles.card}>
-        <View style={styles.header}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{String(authorUsername).slice(0, 2).toUpperCase()}</Text>
-          </View>
-          <View style={styles.headerText}>
-            <Text style={styles.username}>@{authorUsername}</Text>
-            <Text style={styles.name}>{authorName}</Text>
-          </View>
+  const headerComponent = (
+    <View style={styles.card}>
+      <View style={styles.header}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{String(authorUsername).slice(0, 2).toUpperCase()}</Text>
         </View>
-
-        {mediaUrl ? (
-          <Image source={{ uri: mediaUrl }} style={styles.media} resizeMode="cover" />
-        ) : (
-          <View style={styles.mediaPlaceholder}>
-            <Icon name="image" size={40} color={colors.textLight} />
-            <Text style={styles.placeholderText}>Media unavailable</Text>
-          </View>
-        )}
-
-        {post?.title ? <Text style={styles.title}>{post.title}</Text> : null}
-        {caption ? <Text style={styles.caption}>{caption}</Text> : null}
-
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Icon name="thumbs-up-outline" size={18} color={colors.textSecondary} />
-            <Text style={styles.metaText}>{Number(post?.likes_count || 0)}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Icon name="chatbubble-outline" size={18} color={colors.textSecondary} />
-            <Text style={styles.metaText}>{Number(post?.comments_count || 0)}</Text>
-          </View>
+        <View style={styles.headerText}>
+          <Text style={styles.username}>@{authorUsername}</Text>
+          <Text style={styles.name}>{authorName}</Text>
         </View>
       </View>
-    ),
-    [authorUsername, authorName, mediaUrl, post, caption]
+
+      {mediaUrl ? (
+        <Image source={{ uri: mediaUrl }} style={styles.media} resizeMode="cover" />
+      ) : (
+        <View style={styles.mediaPlaceholder}>
+          <Icon name="image" size={40} color={colors.textLight} />
+          <Text style={styles.placeholderText}>Media unavailable</Text>
+        </View>
+      )}
+
+      {post?.title ? <Text style={styles.title}>{post.title}</Text> : null}
+      {caption ? <Text style={styles.caption}>{caption}</Text> : null}
+
+      <View style={styles.metaRow}>
+        <View style={styles.metaItem}>
+          <Icon name="thumbs-up-outline" size={18} color={colors.textSecondary} />
+          <Text style={styles.metaText}>{Number(post?.likes_count || 0)}</Text>
+        </View>
+        <View style={styles.metaItem}>
+          <Icon name="chatbubble-outline" size={18} color={colors.textSecondary} />
+          <Text style={styles.metaText}>{Number(post?.comments_count || 0)}</Text>
+        </View>
+      </View>
+    </View>
   );
 
   return (

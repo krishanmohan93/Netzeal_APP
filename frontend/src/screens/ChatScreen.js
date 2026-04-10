@@ -9,11 +9,14 @@ import {
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   StyleSheet,
   Image,
   ActivityIndicator,
-  Alert
+  Alert,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -38,6 +41,19 @@ const ChatScreen = ({ route, navigation }) => {
   const flatListRef = useRef(null);
   const wsRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+  const messageCountRef = useRef(0);
+
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
 
   useEffect(() => {
     // Prefer provided title, else fallback to username/name while resolving conversation
@@ -110,7 +126,8 @@ const ChatScreen = ({ route, navigation }) => {
       const data = await chatAPI.getMessages(conversationId, cursor);
       
       if (cursor) {
-        setMessages(prev => [...prev, ...data.items]);
+        // Cursor pages return older messages, so prepend to keep chronological order.
+        setMessages(prev => [...data.items, ...prev]);
       } else {
         setMessages(data.items);
       }
@@ -124,6 +141,7 @@ const ChatScreen = ({ route, navigation }) => {
         if (latestMessage.sender_id !== currentUserId) {
           await chatAPI.markMessageRead(latestMessage.id);
         }
+        scrollToBottom(false);
       }
     } catch (err) {
       Alert.alert('Unable to load messages', getUserFacingError(err, 'Please try again.'));
@@ -180,12 +198,14 @@ const ChatScreen = ({ route, navigation }) => {
     switch (message.type) {
       case 'NEW_MESSAGE':
         if (message.data.conversation_id === conversationId) {
-          setMessages(prev => [...prev, message.data]);
-          
-          // Auto-scroll to bottom
-          setTimeout(() => {
-            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-          }, 100);
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          setMessages(prev => {
+            if (prev.some(m => m.id === message.data.id)) {
+              return prev;
+            }
+            return [...prev, message.data];
+          });
+          scrollToBottom(true);
           
           // Mark as read if not from current user
           if (message.data.sender_id !== currentUserId) {
@@ -216,6 +236,23 @@ const ChatScreen = ({ route, navigation }) => {
         break;
     }
   };
+
+  useEffect(() => {
+    const prevCount = messageCountRef.current;
+    if (messages.length > prevCount && !loadingMore) {
+      scrollToBottom(true);
+    }
+    messageCountRef.current = messages.length;
+  }, [messages.length, loadingMore, scrollToBottom]);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      scrollToBottom(true);
+    });
+    return () => {
+      showSub.remove();
+    };
+  }, [scrollToBottom]);
 
   const handleTypingIndicator = (data) => {
     if (data.user_id === currentUserId) return;
@@ -287,6 +324,8 @@ const ChatScreen = ({ route, navigation }) => {
         content,
         messageType: 'TEXT'
       });
+
+      scrollToBottom(true);
       
       // Message will be added via WebSocket NEW_MESSAGE event
     } catch (err) {
@@ -374,15 +413,28 @@ const ChatScreen = ({ route, navigation }) => {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.select({ ios: 90, android: 0 })}
+    >
       <FlatList
         ref={flatListRef}
-        data={[...messages].reverse()}
+        data={messages}
         renderItem={renderMessage}
-        keyExtractor={(item) => item.id.toString()}
-        inverted
-        onEndReached={loadMoreMessages}
-        onEndReachedThreshold={0.5}
+        keyExtractor={(item) => String(item.id)}
+        onScroll={({ nativeEvent }) => {
+          const y = nativeEvent?.contentOffset?.y ?? 0;
+          if (y <= 40) {
+            loadMoreMessages();
+          }
+        }}
+        scrollEventThrottle={16}
+        onContentSizeChange={() => {
+          if (!loadingMore) {
+            scrollToBottom(false);
+          }
+        }}
         ListFooterComponent={
           loadingMore ? (
             <View style={styles.loadingMore}>
@@ -397,6 +449,8 @@ const ChatScreen = ({ route, navigation }) => {
             <Text style={styles.emptySubtitle}>Start the conversation with a quick hello.</Text>
           </View>
         }
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={messages.length === 0 ? styles.emptyContainer : styles.messagesList}
       />
 
@@ -411,44 +465,39 @@ const ChatScreen = ({ route, navigation }) => {
 
       {/* Bottom Chat Input Bar */}
       <View style={styles.bottomBarWrapper}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.select({ ios: 90, android: 0 })}
-        >
-          <View style={styles.inputContainer}>
-            <TouchableOpacity style={styles.attachButton} onPress={() => {}}>
-              <Ionicons name="add-circle-outline" size={24} color="#B8860B" />
-            </TouchableOpacity>
+        <View style={styles.inputContainer}>
+          <TouchableOpacity style={styles.attachButton} onPress={() => {}}>
+            <Ionicons name="add-circle-outline" size={24} color="#B8860B" />
+          </TouchableOpacity>
 
-            <TextInput
-              style={styles.input}
-              value={inputText}
-              onChangeText={handleInputChange}
-              placeholder="Type a message..."
-              placeholderTextColor="#999"
-              multiline
-              maxLength={2000}
-              returnKeyType="send"
-              onSubmitEditing={handleSendMessage}
-              blurOnSubmit={false}
-            />
+          <TextInput
+            style={styles.input}
+            value={inputText}
+            onChangeText={handleInputChange}
+            placeholder="Type a message..."
+            placeholderTextColor="#999"
+            multiline
+            maxLength={2000}
+            returnKeyType="send"
+            onSubmitEditing={handleSendMessage}
+            blurOnSubmit={false}
+          />
 
-            <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
-              onPress={handleSendMessage}
-              disabled={!inputText.trim() || sending}
-              activeOpacity={0.8}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="send" size={18} color="#fff" />
-              )}
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
+          <TouchableOpacity
+            style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
+            onPress={handleSendMessage}
+            disabled={!inputText.trim() || sending}
+            activeOpacity={0.8}
+          >
+            {sending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="send" size={18} color="#fff" />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -465,6 +514,7 @@ const styles = StyleSheet.create({
   messagesList: {
     paddingHorizontal: 12,
     paddingTop: 12,
+    paddingBottom: 12,
   },
   emptyContainer: {
     flex: 1,
@@ -487,7 +537,7 @@ const styles = StyleSheet.create({
   },
   messageRow: {
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 10,
     alignItems: 'flex-end',
   },
   ownMessageRow: {
@@ -509,7 +559,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8DC',
   },
   messageBubble: {
-    maxWidth: '70%',
+    maxWidth: '78%',
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 18,
@@ -559,7 +609,7 @@ const styles = StyleSheet.create({
   },
   typingContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 6,
     backgroundColor: '#f9f9f9',
   },
   typingText: {
@@ -568,10 +618,6 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   bottomBarWrapper: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     backgroundColor: '#FFFDF7',
     paddingHorizontal: 10,
     paddingTop: 6,

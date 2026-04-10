@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   FlatList,
-  Image,
   StyleSheet,
   TouchableOpacity,
   RefreshControl,
@@ -16,8 +15,8 @@ import { useNavigation } from '@react-navigation/native';
 import { notificationsAPI } from '../services/api';
 import { colors } from '../utils/theme';
 import { spacing } from '../utils/theme';
-import { normalizeUri } from '../utils/media';
 import { getUserFacingError } from '../utils/errorMessages';
+import NotificationCard from '../components/NotificationCard';
 
 const normalizeNotificationsPayload = (payload) => {
   if (Array.isArray(payload)) {
@@ -44,6 +43,87 @@ const formatNotificationDate = (value) => {
 const getSenderInitials = (sender) => {
   const raw = sender?.username || 'U';
   return String(raw).slice(0, 2).toUpperCase();
+};
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getDefaultAction = (type) => {
+  switch (String(type || '').toLowerCase()) {
+    case 'like':
+      return 'liked your post';
+    case 'comment':
+      return 'commented';
+    case 'comment_like':
+      return 'liked your comment';
+    case 'comment_reply':
+      return 'replied to your comment';
+    case 'follow':
+      return 'started following you';
+    default:
+      return 'sent you a notification';
+  }
+};
+
+const buildNotificationContent = (item) => {
+  const username = item.sender?.username || 'NetZeal';
+  const defaultAction = getDefaultAction(item.type);
+  const text = String(item.text || '').replace(/\s+/g, ' ').trim();
+
+  if (!text) {
+    return { username, actionText: defaultAction, messagePreview: '' };
+  }
+
+  // Avoid duplicated heading when backend text already starts with sender name.
+  const leadingNamePattern = new RegExp(`^${escapeRegExp(username)}[,:]?\\s+`, 'i');
+  const normalized = text.replace(leadingNamePattern, '').trim();
+  const lower = normalized.toLowerCase();
+
+  if (lower.startsWith('commented')) {
+    const commentText = normalized.replace(/^commented[:\s-]*/i, '').trim();
+    return {
+      username,
+      actionText: 'commented',
+      messagePreview: commentText,
+    };
+  }
+
+  if (lower.startsWith('liked')) {
+    return { username, actionText: normalized, messagePreview: '' };
+  }
+
+  if (lower.startsWith('started following')) {
+    return { username, actionText: 'started following you', messagePreview: '' };
+  }
+
+  if (lower.startsWith('replied')) {
+    const replyText = normalized.replace(/^replied[:\s-]*/i, '').trim();
+    return {
+      username,
+      actionText: 'replied',
+      messagePreview: replyText,
+    };
+  }
+
+  return {
+    username,
+    actionText: defaultAction,
+    messagePreview: normalized,
+  };
+};
+
+const resolveNotificationPostId = (item) => {
+  const raw =
+    item?.post_id ??
+    item?.post?.id ??
+    item?.entity_post_id ??
+    item?.entity?.post_id ??
+    item?.entity?.id ??
+    item?.entity_id;
+  if (raw === null || raw === undefined || raw === '') {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
 const NotificationsScreen = () => {
@@ -114,37 +194,33 @@ const NotificationsScreen = () => {
       item.type === 'comment_like' ||
       item.type === 'comment_reply' ||
       entityType === 'post';
-    if (item.entity_id && isPostActivity) {
-      navigation.navigate('PostDetail', { postId: item.entity_id });
+    const targetPostId = resolveNotificationPostId(item);
+    if (targetPostId && isPostActivity) {
+      navigation.navigate('PostDetail', { postId: targetPostId });
     }
-  };
+  }, [navigation, pendingReadId]);
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      style={[styles.item, !item.is_read && styles.unreadItem]}
-      onPress={() => handlePress(item)}
-      disabled={pendingReadId === item.id}
-    >
-      <View style={styles.avatarContainer}>
-        {normalizeUri(item.sender?.profile_photo) ? (
-          <Image
-            source={{ uri: normalizeUri(item.sender?.profile_photo) }}
-            style={styles.avatar}
-          />
-        ) : (
-          <View style={[styles.avatar, styles.avatarFallback]}>
-            <Text style={styles.avatarFallbackText}>{getSenderInitials(item.sender)}</Text>
-          </View>
-        )}
-      </View>
-      <View style={[styles.content, pendingReadId === item.id && { opacity: 0.6 }]}>
-        <Text style={styles.text}>
-          <Text style={styles.username}>{item.sender?.username || 'NetZeal'} </Text>
-          {item.text || 'New notification'}
-        </Text>
-        <Text style={styles.time}>{formatNotificationDate(item.created_at)}</Text>
-      </View>
-    </TouchableOpacity>
+  const renderItem = useCallback(({ item }) => {
+    const { username, actionText, messagePreview } = buildNotificationContent(item);
+    return (
+      <NotificationCard
+        item={item}
+        username={username}
+        actionText={actionText}
+        messagePreview={messagePreview}
+        timestamp={formatNotificationDate(item.created_at)}
+        isPending={pendingReadId === item.id}
+        onPress={() => handlePress(item)}
+        getSenderInitials={getSenderInitials}
+      />
+    );
+  }, [handlePress, pendingReadId]);
+
+  const keyExtractor = useCallback((item, index) => String(item?.id ?? `notification-${index}`), []);
+
+  const refreshControl = useMemo(
+    () => <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />,
+    [refreshing]
   );
 
   const renderContent = () => {
@@ -190,8 +266,13 @@ const NotificationsScreen = () => {
       <FlatList
         data={notifications}
         renderItem={renderItem}
-        keyExtractor={(item, index) => String(item?.id ?? `notification-${index}`)}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        keyExtractor={keyExtractor}
+        refreshControl={refreshControl}
+        removeClippedSubviews
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={40}
         contentContainerStyle={styles.listContent}
       />
     );
@@ -244,67 +325,6 @@ const styles = StyleSheet.create({
   listContent: {
     paddingTop: 12,
     paddingBottom: 20,
-  },
-  item: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  unreadItem: {
-    borderColor: colors.primaryLight,
-    backgroundColor: colors.secondary,
-  },
-  avatarContainer: {
-    width: 44,
-    height: 44,
-    marginRight: 12,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.border,
-  },
-  avatarFallback: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primary,
-  },
-  avatarFallbackText: {
-    color: colors.surface,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    minHeight: 44,
-  },
-  text: {
-    fontSize: 14,
-    color: colors.text,
-    lineHeight: 20,
-  },
-  username: {
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  time: {
-    fontSize: 12,
-    color: colors.textLight,
-    marginTop: 4,
   },
   emptyText: {
     color: colors.textSecondary,
