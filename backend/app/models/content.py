@@ -229,17 +229,40 @@ class Comment(Base):
     id = Column(Integer, primary_key=True, index=True)
     post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
     author_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=True)
     
     content = Column(Text, nullable=False)
+    likes_count = Column(Integer, default=0)
+    replies_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
     post = relationship("Post", back_populates="comments")
     author = relationship("User", back_populates="comments")
+    parent = relationship("Comment", remote_side=[id], back_populates="replies")
+    replies = relationship("Comment", back_populates="parent", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<Comment {self.id} on Post {self.post_id}>"
+
+
+class CommentLike(Base):
+    """Like model for comment engagement"""
+
+    __tablename__ = "comment_likes"
+    __table_args__ = (UniqueConstraint("user_id", "comment_id", name="uq_comment_likes_user_comment"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    comment_id = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="comment_likes")
+    comment = relationship("Comment")
+
+    def __repr__(self):
+        return f"<CommentLike user={self.user_id} comment={self.comment_id}>"
 
 
 class Like(Base):

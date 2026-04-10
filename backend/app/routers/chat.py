@@ -12,14 +12,17 @@ from ..core.database import get_async_db
 from ..core.rate_limit import chat_message_rate_limit
 from ..models.user import User
 from ..models.chat import (
-    Conversation, ConversationParticipant, Message, 
+    Conversation, ConversationParticipant, Message,
     MessageReadReceipt, MessageEmbedding,
-    ConversationType, MessageType
+    ConversationType as ConversationTypeDB,
+    MessageType as MessageTypeDB,
 )
 from ..schemas.chat import (
     ConversationCreate, ConversationResponse, ConversationParticipantResponse,
     MessageCreate, MessageUpdate, MessageResponse, MessagesResponse,
-    TypingEvent, ReadReceiptEvent, MediaUploadResponse
+    TypingEvent, ReadReceiptEvent, MediaUploadResponse,
+    ConversationType as ConversationTypeSchema,
+    MessageType as MessageTypeSchema,
 )
 from ..routers.auth import get_current_user
 from ..utils.chat_manager import chat_manager
@@ -63,7 +66,7 @@ async def create_conversation(
         raise HTTPException(status_code=400, detail="Invalid participant IDs")
     
     # For direct chat, check if conversation already exists
-    if data.type == ConversationType.DIRECT:
+    if data.type == ConversationTypeSchema.DIRECT:
         if len(data.participant_ids) != 1:
             raise HTTPException(status_code=400, detail="Direct chat must have exactly 1 other participant")
         
@@ -73,7 +76,7 @@ async def create_conversation(
         existing = await db.execute(
             select(Conversation).join(ConversationParticipant).where(
                 and_(
-                    Conversation.type == ConversationType.DIRECT,
+                    Conversation.type == ConversationTypeDB.DIRECT,
                     ConversationParticipant.user_id.in_([current_user.id, other_user_id])
                 )
             ).group_by(Conversation.id).having(
@@ -93,7 +96,7 @@ async def create_conversation(
     
     # Create conversation
     conversation = Conversation(
-        type=data.type,
+        type=ConversationTypeDB[data.type.name],
         title=data.title,
         created_by_id=current_user.id,
         created_at=datetime.utcnow(),
@@ -253,7 +256,7 @@ async def get_conversation_details(
     
     return ConversationResponse(
         id=conversation.id,
-        type=conversation.type,
+        type=ConversationTypeSchema[conversation.type.name],
         title=conversation.title,
         created_at=conversation.created_at,
         last_message_at=conversation.last_message_at,
@@ -333,7 +336,7 @@ async def get_messages(
             sender_full_name=sender.full_name,
             sender_profile_photo=sender.profile_photo,
             content=msg.content,
-            message_type=msg.message_type,
+            message_type=MessageTypeSchema[msg.message_type.name],
             media_url=msg.media_url,
             media_thumbnail_url=msg.media_thumbnail_url,
             message_metadata=msg.message_metadata,
@@ -367,7 +370,7 @@ async def get_messages(
 async def send_message(
     conversation_id: int,
     content: Optional[str] = Form(None),
-    message_type: MessageType = Form(MessageType.TEXT),
+    message_type: str = Form("TEXT"),
     reply_to_id: Optional[int] = Form(None),
     media: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
@@ -402,11 +405,13 @@ async def send_message(
             raise HTTPException(status_code=500, detail="Media upload failed")
     
     # Create message
+    normalized_message_type = MessageTypeDB[str(message_type).upper()] if message_type else MessageTypeDB.TEXT
+
     message = Message(
         conversation_id=conversation_id,
         sender_id=current_user.id,
         content=content,
-        message_type=message_type,
+        message_type=normalized_message_type,
         media_url=media_url,
         media_thumbnail_url=media_thumbnail_url,
         reply_to_id=reply_to_id,
@@ -458,7 +463,7 @@ async def send_message(
         sender_full_name=current_user.full_name,
         sender_profile_photo=current_user.profile_photo,
         content=message.content,
-        message_type=message.message_type,
+        message_type=MessageTypeSchema[message.message_type.name],
         media_url=message.media_url,
         media_thumbnail_url=message.media_thumbnail_url,
         reply_to_id=message.reply_to_id,
@@ -498,7 +503,7 @@ async def edit_message(
     if message.sender_id != current_user.id:
         raise HTTPException(status_code=403, detail="Can only edit your own messages")
     
-    if message.message_type != MessageType.TEXT:
+    if message.message_type != MessageTypeDB.TEXT:
         raise HTTPException(status_code=400, detail="Can only edit text messages")
     
     message.content = data.content
@@ -519,7 +524,7 @@ async def edit_message(
         sender_full_name=sender.full_name,
         sender_profile_photo=sender.profile_photo,
         content=message.content,
-        message_type=message.message_type,
+        message_type=MessageTypeSchema[message.message_type.name],
         media_url=message.media_url,
         reply_to_id=message.reply_to_id,
         is_edited=message.is_edited,

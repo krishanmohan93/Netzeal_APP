@@ -181,6 +181,7 @@ class CommentBase(BaseModel):
 class CommentCreate(CommentBase):
     """Schema for creating a comment"""
     post_id: Optional[int] = None
+    parent_id: Optional[int] = None
 
 
 class CommentResponse(CommentBase):
@@ -188,6 +189,10 @@ class CommentResponse(CommentBase):
     id: int
     post_id: int
     author_id: int
+    parent_id: Optional[int] = None
+    likes_count: int = 0
+    replies_count: int = 0
+    is_liked: bool = False
     author_username: Optional[str] = None
     author_full_name: Optional[str] = None
     author_photo: Optional[str] = None
@@ -204,6 +209,17 @@ class LikeResponse(BaseModel):
     post_id: int
     created_at: datetime
     
+    class Config:
+        from_attributes = True
+
+
+class CommentLikeResponse(BaseModel):
+    """Schema for comment-like response"""
+    id: int
+    user_id: int
+    comment_id: int
+    created_at: datetime
+
     class Config:
         from_attributes = True
 

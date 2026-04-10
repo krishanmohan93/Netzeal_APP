@@ -2,7 +2,7 @@
 Initialize models package
 """
 from .user import User
-from .content import Post, Comment, Like, Bookmark, ContentType, FeedItem
+from .content import Post, Comment, CommentLike, Like, Bookmark, ContentType, FeedItem
 from .social import Follow, UserInteraction, InteractionType, AIConversation
 from .connection import Connection, ConversationV2, MessageV2
 from .collab import CollaborationRequest, CollaborationStatus
@@ -12,6 +12,7 @@ __all__ = [
     "User",
     "Post",
     "Comment",
+    "CommentLike",
     "Like",
     "Bookmark",
     "ContentType",

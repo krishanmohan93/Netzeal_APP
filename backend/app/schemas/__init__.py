@@ -21,6 +21,7 @@ from .content import (
     CommentResponse,
     LikeResponse,
     BookmarkResponse,
+    CommentLikeResponse,
 )
 from .ai import (
     ChatMessage,
@@ -48,6 +49,7 @@ __all__ = [
     "CommentResponse",
     "LikeResponse",
     "BookmarkResponse",
+    "CommentLikeResponse",
     "ChatMessage",
     "ChatResponse",
     "RecommendationRequest",

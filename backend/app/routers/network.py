@@ -4,7 +4,7 @@ Search, connect, and chat v2 endpoints using UUID public identifiers
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, desc, select
+from sqlalchemy import and_, or_, desc, select, text
 from uuid import UUID, uuid4
 from typing import List, Set
 
@@ -28,9 +28,41 @@ from ..schemas.connect import (
 from ..routers.auth import get_current_user
 from ..services.notification_service import create_notification_async
 from ..schemas.content import PostResponse
-from ..utils.redis_cache import invalidate_profile_cache
+from ..utils.redis_cache import invalidate_profile_cache, invalidate_all_feeds
 
 router = APIRouter(tags=["Network"])
+
+
+async def _seed_feed_for_new_follow_async(
+    db: AsyncSession,
+    follower_id: int,
+    following_id: int,
+    limit: int = 50,
+) -> int:
+    """Backfill recent published posts from followed user into follower feed."""
+    seed_query = text(
+        """
+        INSERT INTO feed_items (user_id, post_id)
+        SELECT :follower_id, p.id
+        FROM posts p
+        LEFT JOIN feed_items fi
+          ON fi.user_id = :follower_id AND fi.post_id = p.id
+        WHERE p.author_id = :following_id
+          AND p.is_published = true
+          AND fi.id IS NULL
+        ORDER BY COALESCE(p.published_at, p.created_at) DESC
+        LIMIT :seed_limit
+        """
+    )
+    result = await db.execute(
+        seed_query,
+        {
+            "follower_id": follower_id,
+            "following_id": following_id,
+            "seed_limit": max(1, min(limit, 200)),
+        },
+    )
+    return int(result.rowcount or 0)
 
 
 async def _ensure_public_id(user: User, db) -> UUID:
@@ -476,15 +508,17 @@ async def connect_toggle(
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
 
-    async with db.begin():
+    conn_obj = None
+    conversation_id = None
+    trigger_notification = False
+
+    try:
         existing_conn = await db.execute(
             select(Connection).where(
                 and_(Connection.follower_id == me_public_id, Connection.following_id == target_public_id)
             )
         )
         conn_obj = existing_conn.scalar_one_or_none()
-        conversation_id = None
-        trigger_notification = False
 
         if conn_obj:
             # Unfollow: remove connection and conversation
@@ -527,14 +561,19 @@ async def connect_toggle(
             )
             if legacy_follow.scalar_one_or_none() is None:
                 db.add(Follow(follower_id=current_user.id, following_id=target_user.id))
+            await _seed_feed_for_new_follow_async(db, current_user.id, target_user.id)
             conv = await _get_or_create_conversation(db, me_public_id, target_public_id)
             conversation_id = conv.id
             await db.flush()
             conn_obj = new_conn
             trigger_notification = True
 
-    await db.commit()
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await invalidate_profile_cache([current_user.id, target_user.id])
+    await invalidate_all_feeds([current_user.id])
 
     if trigger_notification:
          # target_user.id is integer ID needed for notification
@@ -572,8 +611,12 @@ async def create_chat(
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
 
-    async with db.begin():
+    try:
         conv = await _get_or_create_conversation(db, me_public_id, target_public_id)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     return ChatConversationResponse(
         id=conv.id,
@@ -605,7 +648,7 @@ async def send_message(
     if me_public_id not in {conv.user_a_id, conv.user_b_id}:
         raise HTTPException(status_code=403, detail="Not a participant")
 
-    async with db.begin():
+    try:
         msg = MessageV2(
             conversation_id=conv.id,
             sender_id=me_public_id,
@@ -614,8 +657,10 @@ async def send_message(
         db.add(msg)
         conv.last_message_at = msg.created_at
         await db.flush()
-
-    await db.commit()
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     await db.refresh(msg)
 
     return ChatMessageResponse(

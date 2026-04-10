@@ -3,7 +3,7 @@ Social networking routes (follow, networking)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, text
 from sqlalchemy.exc import IntegrityError
 from typing import List
 
@@ -11,7 +11,7 @@ from ..core.database import get_db
 from ..core.security import get_current_user
 from ..core.rate_limit import engagement_rate_limit
 from ..core.feature_gates import require_semantic_features_enabled
-from ..utils.redis_cache import invalidate_profile_cache
+from ..utils.redis_cache import invalidate_profile_cache, invalidate_all_feeds
 from ..models import User, Follow, Post, Connection
 from ..schemas.user import UserResponse
 from ..services.embedding_service import EmbeddingService
@@ -26,6 +26,36 @@ _embedding_service = None
 _embedding_init_attempted = False
 _qdrant_service = None
 _qdrant_init_attempted = False
+
+
+def _seed_feed_for_new_follow(db: Session, follower_id: int, following_id: int, limit: int = 50) -> int:
+    """Backfill recent published posts from followed user into follower feed."""
+    if not follower_id or not following_id:
+        return 0
+
+    seed_query = text(
+        """
+        INSERT INTO feed_items (user_id, post_id)
+        SELECT :follower_id, p.id
+        FROM posts p
+        LEFT JOIN feed_items fi
+          ON fi.user_id = :follower_id AND fi.post_id = p.id
+        WHERE p.author_id = :following_id
+          AND p.is_published = true
+          AND fi.id IS NULL
+        ORDER BY COALESCE(p.published_at, p.created_at) DESC
+        LIMIT :seed_limit
+        """
+    )
+    result = db.execute(
+        seed_query,
+        {
+            "follower_id": follower_id,
+            "following_id": following_id,
+            "seed_limit": max(1, min(limit, 200)),
+        },
+    )
+    return int(result.rowcount or 0)
 
 
 def get_embedding_service():
@@ -169,8 +199,10 @@ async def follow_user(
     if existing_follow:
         # Keep UUID graph in sync for feed/profile/chat-v2 paths.
         _ensure_connection_sync(db, current_user, user_to_follow)
+        _seed_feed_for_new_follow(db, current_user.id, user_id)
         db.commit()
         await invalidate_profile_cache([current_user.id, user_id])
+        await invalidate_all_feeds([current_user.id])
         return {"message": f"Successfully followed {user_to_follow.username}"}
     
     # Create follow relationship
@@ -181,6 +213,7 @@ async def follow_user(
     
     db.add(new_follow)
     _ensure_connection_sync(db, current_user, user_to_follow)
+    _seed_feed_for_new_follow(db, current_user.id, user_id)
     try:
         db.commit()
     except IntegrityError:
@@ -196,6 +229,7 @@ async def follow_user(
         )
 
     await invalidate_profile_cache([current_user.id, user_id])
+    await invalidate_all_feeds([current_user.id])
     
     return {"message": f"Successfully followed {user_to_follow.username}"}
 

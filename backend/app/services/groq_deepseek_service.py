@@ -89,6 +89,12 @@ class AIService:
         if mode not in {"free", "deep"}:
             raise ValueError(f"Invalid mode: {mode}. Use 'free' or 'deep'")
 
+        if not settings.GROQ_API_KEY and not settings.NVIDIA_API_KEY:
+            return (
+                "AI is temporarily unavailable. "
+                "Please configure an AI provider key to enable responses."
+            )
+
         # Keep AI answers concise/medium and avoid over-generation.
         token_cap = settings.AI_MAX_RESPONSE_TOKENS if settings.AI_MAX_RESPONSE_TOKENS > 0 else 320
         bounded_max_tokens = max(64, min(max_tokens, token_cap))

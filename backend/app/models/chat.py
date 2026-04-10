@@ -10,18 +10,18 @@ from ..core.database import Base
 
 class ConversationType(enum.Enum):
     """Type of conversation"""
-    DIRECT = "direct"  # One-on-one chat
-    GROUP = "group"    # Group chat
+    DIRECT = "DIRECT"  # One-on-one chat (matches DB enum)
+    GROUP = "GROUP"    # Group chat (matches DB enum)
 
 
 class MessageType(enum.Enum):
     """Type of message content"""
-    TEXT = "text"
-    IMAGE = "image"
-    VIDEO = "video"
-    FILE = "file"
-    VOICE = "voice"
-    SYSTEM = "system"  # System notifications
+    TEXT = "TEXT"
+    IMAGE = "IMAGE"
+    VIDEO = "VIDEO"
+    FILE = "FILE"
+    VOICE = "VOICE"
+    SYSTEM = "SYSTEM"  # System notifications
 
 
 class Conversation(Base):

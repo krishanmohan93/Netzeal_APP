@@ -2,12 +2,13 @@
 Content management routes (posts, comments, likes, bookmarks)
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from datetime import datetime, timezone
 import logging
+import math
 import mimetypes
 from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 from sqlalchemy import desc, or_, func
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional
 from typing import List, Optional
 import json
 
@@ -17,7 +18,7 @@ from ..core.security import get_current_user
 from ..core.rate_limit import post_create_rate_limit, engagement_rate_limit
 from ..core.feature_gates import require_live_streaming_enabled, require_semantic_features_enabled
 from ..core.cloudinary_config import cloudinary_service
-from ..models import User, Post, Comment, Like, Bookmark, UserInteraction, InteractionType, Connection, Follow
+from ..models import User, Post, Comment, CommentLike, Like, Bookmark, UserInteraction, InteractionType, Connection, Follow
 from ..models.content import ContentType, LiveSession, LiveComment, PostMedia, MediaType
 from ..schemas.content import (
     PostCreate,
@@ -34,6 +35,7 @@ from ..schemas.content import (
     LiveCommentResponse,
     CommentCreate,
     CommentResponse,
+    CommentLikeResponse,
     LikeResponse,
     BookmarkResponse,
     PostDraftCreate,
@@ -139,6 +141,90 @@ def _get_allowed_author_ids(db: Session, current_user: User) -> List[int]:
             allowed_author_ids.update(mapped_ids)
 
     return list(allowed_author_ids)
+
+
+def _normalize_feed_terms(values: Optional[List[str]]) -> set[str]:
+    terms: set[str] = set()
+    if not values:
+        return terms
+
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().lower()
+        if not normalized:
+            continue
+        if normalized.startswith("#"):
+            normalized = normalized[1:]
+        if normalized:
+            terms.add(normalized)
+    return terms
+
+
+def _post_rank_timestamp(post: Post) -> float:
+    dt = post.published_at or post.created_at
+    if not dt:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _get_interest_terms_for_user(current_user: User) -> set[str]:
+    interests = _normalize_feed_terms(current_user.interests)
+    skills = _normalize_feed_terms(current_user.skills)
+    return interests.union(skills)
+
+
+def _calculate_weighted_feed_score(post: Post, current_user_terms: set[str], now_utc: datetime) -> float:
+    event_time = post.published_at or post.created_at
+    if event_time is None:
+        age_hours = 9999.0
+    else:
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+        age_hours = max(0.0, (now_utc - event_time).total_seconds() / 3600.0)
+
+    # Recency decays with a ~36 hour half-life for a social feed style balance.
+    recency_score = math.exp(-age_hours / 36.0)
+
+    engagement_raw = (
+        max(0, post.likes_count or 0) * 1.0
+        + max(0, post.comments_count or 0) * 2.4
+        + max(0, post.shares_count or 0) * 3.2
+        + max(0, post.views_count or 0) * 0.08
+    )
+    engagement_score = min(1.0, math.log1p(engagement_raw) / math.log1p(500.0))
+
+    post_terms = _normalize_feed_terms(post.tags if isinstance(post.tags, list) else None)
+    if current_user_terms and post_terms:
+        overlap = len(current_user_terms.intersection(post_terms))
+        interest_score = min(1.0, overlap / max(1.0, min(4.0, float(len(post_terms)))))
+    else:
+        interest_score = 0.0
+
+    # Weighted blend: recency + engagement + user-interest tag affinity.
+    return (0.50 * recency_score) + (0.30 * engagement_score) + (0.20 * interest_score)
+
+
+def _rank_feed_posts(posts: List[Post], current_user: User) -> List[Post]:
+    if not posts:
+        return []
+
+    current_user_terms = _get_interest_terms_for_user(current_user)
+    now_utc = datetime.now(timezone.utc)
+
+    scored_posts = [
+        (
+            post,
+            _calculate_weighted_feed_score(post, current_user_terms, now_utc),
+            _post_rank_timestamp(post),
+        )
+        for post in posts
+    ]
+
+    scored_posts.sort(key=lambda item: (item[1], item[2], item[0].id), reverse=True)
+    return [item[0] for item in scored_posts]
 
 
 def _resolve_upload_mime(upload: UploadFile) -> str:
@@ -728,15 +814,35 @@ async def create_comment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Post not found"
         )
+
+    parent_comment = None
+    if comment_data.parent_id is not None:
+        parent_comment = (
+            db.query(Comment)
+            .filter(Comment.id == comment_data.parent_id, Comment.post_id == post_id)
+            .first()
+        )
+        if not parent_comment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Parent comment not found"
+            )
     
     # Create comment
     new_comment = Comment(
         post_id=post_id,
         author_id=current_user.id,
-        content=comment_data.content
+        content=comment_data.content,
+        parent_id=comment_data.parent_id
     )
     
     db.add(new_comment)
+
+    if parent_comment:
+        db.query(Comment).filter(Comment.id == parent_comment.id).update(
+            {Comment.replies_count: Comment.replies_count + 1},
+            synchronize_session=False,
+        )
     
     # Update post comments count atomically
     db.query(Post).filter(Post.id == post_id).update(
@@ -769,11 +875,34 @@ async def create_comment(
         f"{current_user.username} commented: {comment_data.content[:20]}...",
         post.id
     )
+    if parent_comment and parent_comment.author_id != post.author_id:
+        await create_notification(
+            db,
+            parent_comment.author_id,
+            current_user.id,
+            "comment_reply",
+            f"{current_user.username} replied: {comment_data.content[:20]}...",
+            post.id
+        )
 
     comment_dict = CommentResponse.model_validate(new_comment).model_dump()
     comment_dict["author_username"] = current_user.username
     comment_dict["author_full_name"] = current_user.full_name
     comment_dict["author_photo"] = current_user.profile_photo
+    comment_dict["is_liked"] = False
+
+    try:
+        await manager.broadcast_json(
+            {
+                "type": "COMMENT_CREATED",
+                "data": {
+                    "post_id": post_id,
+                    "comment": comment_dict,
+                },
+            }
+        )
+    except Exception:
+        pass
     
     return comment_dict
 
@@ -795,6 +924,16 @@ async def get_post_comments(
     ).filter(
         Comment.post_id == post_id
     ).order_by(desc(Comment.created_at)).offset(skip).limit(limit).all()
+
+    comment_ids = [c.id for c in comments]
+    liked_comment_ids = set()
+    if comment_ids:
+        liked_comment_ids = {
+            row[0]
+            for row in db.query(CommentLike.comment_id)
+            .filter(CommentLike.user_id == current_user.id, CommentLike.comment_id.in_(comment_ids))
+            .all()
+        }
     
     result = []
     for comment in comments:
@@ -802,9 +941,103 @@ async def get_post_comments(
         comment_dict["author_username"] = comment.author.username
         comment_dict["author_full_name"] = comment.author.full_name
         comment_dict["author_photo"] = comment.author.profile_photo
+        comment_dict["is_liked"] = comment.id in liked_comment_ids
         result.append(comment_dict)
     
     return result
+
+
+@router.post("/comments/{comment_id}/like", response_model=CommentLikeResponse)
+async def like_comment(
+    comment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
+):
+    """Like a comment"""
+    comment = db.query(Comment).filter(Comment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    existing = (
+        db.query(CommentLike)
+        .filter(CommentLike.user_id == current_user.id, CommentLike.comment_id == comment_id)
+        .first()
+    )
+    if existing:
+        return CommentLikeResponse.model_validate(existing)
+
+    like = CommentLike(user_id=current_user.id, comment_id=comment_id)
+    db.add(like)
+    db.query(Comment).filter(Comment.id == comment_id).update(
+        {Comment.likes_count: Comment.likes_count + 1},
+        synchronize_session=False,
+    )
+    db.commit()
+    db.refresh(like)
+    updated_count = db.query(Comment.likes_count).filter(Comment.id == comment_id).scalar() or 0
+
+    await create_notification(
+        db,
+        comment.author_id,
+        current_user.id,
+        "comment_like",
+        f"{current_user.username} liked your comment",
+        comment.post_id,
+    )
+
+    try:
+        await manager.broadcast_json(
+            {
+                "type": "COMMENT_LIKED",
+                "data": {
+                    "post_id": comment.post_id,
+                    "comment_id": comment.id,
+                    "likes_count": updated_count,
+                },
+            }
+        )
+    except Exception:
+        pass
+
+    return CommentLikeResponse.model_validate(like)
+
+
+@router.delete("/comments/{comment_id}/like")
+async def unlike_comment(
+    comment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: None = Depends(engagement_rate_limit),
+):
+    """Unlike a comment"""
+    like = (
+        db.query(CommentLike)
+        .filter(CommentLike.user_id == current_user.id, CommentLike.comment_id == comment_id)
+        .first()
+    )
+    if not like:
+        return {"success": True}
+
+    db.delete(like)
+    db.query(Comment).filter(Comment.id == comment_id).update(
+        {Comment.likes_count: func.greatest(Comment.likes_count - 1, 0)},
+        synchronize_session=False,
+    )
+    db.commit()
+    updated_count = db.query(Comment.likes_count).filter(Comment.id == comment_id).scalar() or 0
+
+    try:
+        await manager.broadcast_json(
+            {
+                "type": "COMMENT_UNLIKED",
+                "data": {"comment_id": comment_id, "likes_count": updated_count},
+            }
+        )
+    except Exception:
+        pass
+
+    return {"success": True}
 
 
 # ============================================================================
@@ -1219,13 +1452,7 @@ async def get_instagram_feed(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Get Instagram-like feed
-    
-    - Returns posts sorted by newest first
-    - Includes user info, media URLs, engagement stats
-    - Optimized for mobile display
-    """
+    """Get Instagram-like feed ranked by recency, engagement, and interest tags."""
     
     print(f"📰 Feed request from user: {current_user.username} (skip={skip}, limit={limit})")
 
@@ -1242,6 +1469,9 @@ async def get_instagram_feed(
     
     # Get posts with media (both legacy media_urls and new PostMedia)
     # Include posts that have either media_urls OR PostMedia items
+    target_count = skip + limit
+    candidate_pool_limit = min(max(target_count * 3, 60), 500)
+
     posts = (
         db.query(Post)
         .options(
@@ -1274,31 +1504,84 @@ async def get_instagram_feed(
             )
         )
         .order_by(desc(Post.created_at))
-        .offset(skip)
-        .limit(limit)
+        .limit(candidate_pool_limit)
         .all()
     )
-    
+
+    if len(posts) < target_count:
+        existing_ids = [p.id for p in posts]
+        recommendation_query = (
+            db.query(Post)
+            .options(
+                joinedload(Post.author).load_only(
+                    User.id,
+                    User.username,
+                    User.full_name,
+                    User.profile_photo,
+                    User.is_verified,
+                ),
+                selectinload(Post.media_items).load_only(
+                    PostMedia.id,
+                    PostMedia.post_id,
+                    PostMedia.media_type,
+                    PostMedia.url,
+                    PostMedia.thumb_url,
+                    PostMedia.order_index,
+                    PostMedia.width,
+                    PostMedia.height,
+                    PostMedia.duration_seconds,
+                ),
+                selectinload(Post.likes).load_only(Like.id, Like.post_id),
+                selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+            )
+            .filter(
+                Post.is_published == True,
+                Post.visibility == "public",
+                or_(
+                    Post.media_urls.isnot(None),
+                    Post.id.in_(db.query(PostMedia.post_id).distinct()),
+                ),
+            )
+        )
+        if existing_ids:
+            recommendation_query = recommendation_query.filter(Post.id.notin_(existing_ids))
+
+        remaining = max(0, target_count - len(posts))
+        recommended_posts = (
+            recommendation_query
+            .order_by(desc(Post.likes_count), desc(Post.comments_count), desc(Post.created_at))
+            .limit(max(remaining * 3, remaining))
+            .all()
+        )
+        posts.extend(recommended_posts)
+
+    deduped_posts = {post.id: post for post in posts}
+    ranked_posts = _rank_feed_posts(list(deduped_posts.values()), current_user)
+    posts = ranked_posts[skip: skip + limit]
+
     print(f"   Found {len(posts)} posts with media")
     for post in posts[:3]:  # Log first 3 posts
         print(f"   - Post {post.id}: {post.content_type.value}, media: {len(post.media_urls) if post.media_urls else 0} URLs")
     
     # Get user's likes and bookmarks for this batch
     post_ids = [post.id for post in posts]
-    user_likes = {
-        like.post_id 
-        for like in db.query(Like).filter(
-            Like.user_id == current_user.id,
-            Like.post_id.in_(post_ids)
-        ).all()
-    }
-    user_bookmarks = {
-        bm.post_id 
-        for bm in db.query(Bookmark).filter(
-            Bookmark.user_id == current_user.id,
-            Bookmark.post_id.in_(post_ids)
-        ).all()
-    }
+    user_likes = set()
+    user_bookmarks = set()
+    if post_ids:
+        user_likes = {
+            like.post_id
+            for like in db.query(Like).filter(
+                Like.user_id == current_user.id,
+                Like.post_id.in_(post_ids)
+            ).all()
+        }
+        user_bookmarks = {
+            bm.post_id
+            for bm in db.query(Bookmark).filter(
+                Bookmark.user_id == current_user.id,
+                Bookmark.post_id.in_(post_ids)
+            ).all()
+        }
     
     # Build feed response
     feed = []
@@ -1559,13 +1842,11 @@ async def get_cursor_feed(
     """Cursor-based feed backed by fan-out table.
 
     Cursor format: published_at_iso|post_id (e.g., 2025-01-15T12:00:00.123456+00:00_42)
-    Returns items ordered by published_at desc, id desc.
+    Returns items ranked by recency + engagement + interest tags.
     """
-    from datetime import datetime
-
     allowed_author_ids = _get_allowed_author_ids(db, current_user)
-    if not allowed_author_ids:
-        return FeedResponse(items=[], next_cursor=None)
+
+    candidate_target = min(max(limit * 4, 60), 500)
 
     cursor_time = None
     cursor_post_id = None
@@ -1577,7 +1858,22 @@ async def get_cursor_feed(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid cursor format")
 
-    q = db.query(Post).join(FeedItem, FeedItem.post_id == Post.id).options(
+    media_filter = or_(
+        Post.media_urls.isnot(None),
+        Post.id.in_(db.query(PostMedia.post_id).distinct()),
+    )
+    visibility_filter = or_(
+        Post.visibility == "public",
+        Post.author_id == current_user.id,
+    )
+    cursor_filter = None
+    if cursor_time and cursor_post_id:
+        cursor_filter = or_(
+            Post.published_at < cursor_time,
+            (Post.published_at == cursor_time) & (Post.id < cursor_post_id),
+        )
+
+    feed_item_query = db.query(Post).join(FeedItem, FeedItem.post_id == Post.id).options(
         joinedload(Post.author).load_only(
             User.id,
             User.username,
@@ -1601,24 +1897,119 @@ async def get_cursor_feed(
     ).filter(
         FeedItem.user_id == current_user.id,
         Post.is_published == True,
-        Post.visibility.in_(["public", "private"]),
-        Post.author_id.in_(allowed_author_ids)
+        visibility_filter,
+        media_filter,
     )
 
-    if cursor_time and cursor_post_id:
-        # (published_at, id) tuple comparison for stable pagination
-        q = q.filter(
-            or_(
-                Post.published_at < cursor_time,
-                (Post.published_at == cursor_time) & (Post.id < cursor_post_id)
+    if cursor_filter is not None:
+        feed_item_query = feed_item_query.filter(cursor_filter)
+
+    feed_posts = (
+        feed_item_query
+        .order_by(desc(Post.published_at), desc(Post.id))
+        .limit(candidate_target)
+        .all()
+    )
+
+    posts_by_id = {post.id: post for post in feed_posts}
+
+    # Backfill from followed/connected authors when fan-out table is sparse.
+    remaining = max(0, candidate_target - len(posts_by_id))
+    if remaining > 0 and allowed_author_ids:
+        follow_posts_query = (
+            db.query(Post)
+            .options(
+                joinedload(Post.author).load_only(
+                    User.id,
+                    User.username,
+                    User.full_name,
+                    User.profile_photo,
+                    User.is_verified,
+                ),
+                selectinload(Post.media_items).load_only(
+                    PostMedia.id,
+                    PostMedia.post_id,
+                    PostMedia.media_type,
+                    PostMedia.url,
+                    PostMedia.thumb_url,
+                    PostMedia.order_index,
+                    PostMedia.width,
+                    PostMedia.height,
+                    PostMedia.duration_seconds,
+                ),
+                selectinload(Post.likes).load_only(Like.id, Like.post_id),
+                selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+            )
+            .filter(
+                Post.is_published == True,
+                visibility_filter,
+                media_filter,
+                Post.author_id.in_(allowed_author_ids),
             )
         )
+        if cursor_filter is not None:
+            follow_posts_query = follow_posts_query.filter(cursor_filter)
+        if posts_by_id:
+            follow_posts_query = follow_posts_query.filter(Post.id.notin_(list(posts_by_id.keys())))
 
-    q = q.order_by(desc(Post.published_at), desc(Post.id)).limit(limit + 1)  # fetch one extra to decide next_cursor
-    rows = q.all()
+        follow_posts = (
+            follow_posts_query
+            .order_by(desc(Post.published_at), desc(Post.id))
+            .limit(max(remaining * 2, remaining))
+            .all()
+        )
+        for post in follow_posts:
+            posts_by_id.setdefault(post.id, post)
 
-    # Separate posts; gather IDs for like/bookmark flags
-    posts = rows[:limit]
+    # Global recommendations for brand-new users so feed is never empty.
+    remaining = max(0, candidate_target - len(posts_by_id))
+    if remaining > 0:
+        global_posts_query = (
+            db.query(Post)
+            .options(
+                joinedload(Post.author).load_only(
+                    User.id,
+                    User.username,
+                    User.full_name,
+                    User.profile_photo,
+                    User.is_verified,
+                ),
+                selectinload(Post.media_items).load_only(
+                    PostMedia.id,
+                    PostMedia.post_id,
+                    PostMedia.media_type,
+                    PostMedia.url,
+                    PostMedia.thumb_url,
+                    PostMedia.order_index,
+                    PostMedia.width,
+                    PostMedia.height,
+                    PostMedia.duration_seconds,
+                ),
+                selectinload(Post.likes).load_only(Like.id, Like.post_id),
+                selectinload(Post.comments).load_only(Comment.id, Comment.post_id),
+            )
+            .filter(
+                Post.is_published == True,
+                Post.visibility == "public",
+                media_filter,
+                Post.author_id != current_user.id,
+            )
+        )
+        if cursor_filter is not None:
+            global_posts_query = global_posts_query.filter(cursor_filter)
+        if posts_by_id:
+            global_posts_query = global_posts_query.filter(Post.id.notin_(list(posts_by_id.keys())))
+
+        global_posts = (
+            global_posts_query
+            .order_by(desc(Post.likes_count), desc(Post.comments_count), desc(Post.published_at), desc(Post.id))
+            .limit(max(remaining * 3, remaining))
+            .all()
+        )
+        for post in global_posts:
+            posts_by_id.setdefault(post.id, post)
+
+    posts = _rank_feed_posts(list(posts_by_id.values()), current_user)[:limit]
     post_ids = [p.id for p in posts]
 
     user_likes = {
@@ -1682,10 +2073,11 @@ async def get_cursor_feed(
         )
 
     next_cursor = None
-    if len(rows) > limit and posts:
+    if len(posts) == limit and posts:
         last = posts[-1]
-        if last.published_at:
-            next_cursor = f"{last.published_at.isoformat()}_{last.id}"
+        cursor_source_time = last.published_at or last.created_at
+        if cursor_source_time:
+            next_cursor = f"{cursor_source_time.isoformat()}_{last.id}"
 
     return FeedResponse(items=feed_items, next_cursor=next_cursor)
 
