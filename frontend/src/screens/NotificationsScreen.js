@@ -7,11 +7,15 @@ import {
   StyleSheet,
   TouchableOpacity,
   RefreshControl,
-  ActivityIndicator
+  ActivityIndicator,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { notificationsAPI } from '../services/api';
 import { colors } from '../utils/theme';
+import { spacing } from '../utils/theme';
 import { normalizeUri } from '../utils/media';
 import { getUserFacingError } from '../utils/errorMessages';
 
@@ -143,35 +147,35 @@ const NotificationsScreen = () => {
     </TouchableOpacity>
   );
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      );
+    }
 
-  if (error) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.emptyText}>{error}</Text>
-        <TouchableOpacity
-          style={[styles.retryButton, retrying && styles.buttonDisabled]}
-          onPress={() => {
-            setRetrying(true);
-            fetchNotifications();
-          }}
-          disabled={retrying}
-        >
-          {retrying ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.retryText}>Retry</Text>}
-        </TouchableOpacity>
-      </View>
-    );
-  }
+    if (error) {
+      return (
+        <View style={styles.center}>
+          <Text style={styles.emptyText}>{error}</Text>
+          <TouchableOpacity
+            style={[styles.retryButton, retrying && styles.buttonDisabled]}
+            onPress={() => {
+              setRetrying(true);
+              fetchNotifications();
+            }}
+            disabled={retrying}
+          >
+            {retrying ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.retryText}>Retry</Text>}
+          </TouchableOpacity>
+        </View>
+      );
+    }
 
-  if (notifications.length === 0) {
-    return (
-      <View style={styles.container}>
+    if (notifications.length === 0) {
+      return (
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
             <Text style={styles.emptyIconText}>N</Text>
@@ -179,12 +183,10 @@ const NotificationsScreen = () => {
           <Text style={styles.emptyTitle}>No notifications yet</Text>
           <Text style={styles.emptySubText}>Follow, like, and comment activity will appear here.</Text>
         </View>
-      </View>
-    );
-  }
+      );
+    }
 
-  return (
-    <View style={styles.container}>
+    return (
       <FlatList
         data={notifications}
         renderItem={renderItem}
@@ -192,7 +194,19 @@ const NotificationsScreen = () => {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         contentContainerStyle={styles.listContent}
       />
-    </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={styles.header}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.headerTitle}>Notifications</Text>
+        </View>
+      </View>
+      {renderContent()}
+    </SafeAreaView>
   );
 };
 
@@ -200,6 +214,25 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  header: {
+    backgroundColor: '#FFFFFF',
+    paddingTop: (Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 0) + spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8ECF0',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
   },
   center: {
     flex: 1,
@@ -283,6 +316,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
+    backgroundColor: colors.background,
   },
   emptyIcon: {
     width: 64,

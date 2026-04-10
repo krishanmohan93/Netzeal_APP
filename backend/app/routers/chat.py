@@ -478,7 +478,7 @@ async def send_message(
     # Broadcast via WebSocket
     await chat_manager.handle_new_message(
         conversation_id,
-        message_response.dict()
+        message_response.model_dump(mode="json")
     )
     
     return message_response

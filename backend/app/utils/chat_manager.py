@@ -87,7 +87,7 @@ class ChatConnectionManager:
         """Send message to specific user (all their connections)"""
         if user_id in self.active_connections:
             disconnected = []
-            for websocket in self.active_connections[user_id]:
+            for websocket in list(self.active_connections[user_id]):
                 try:
                     await websocket.send_json(message)
                 except Exception as e:
@@ -105,8 +105,10 @@ class ChatConnectionManager:
         """
         if conversation_id not in self.room_members:
             return
-        
-        for user_id in self.room_members[conversation_id]:
+
+        # Snapshot to avoid "set changed size during iteration" during disconnect cleanup.
+        member_ids = list(self.room_members.get(conversation_id, set()))
+        for user_id in member_ids:
             if exclude_user and user_id == exclude_user:
                 continue
             await self.send_personal_message(message, user_id)
