@@ -584,11 +584,22 @@ export const contentAPI = {
     return response.data;
   },
 
-  createComment: async (postId, content) => {
+  createComment: async (postId, content, parentId = null) => {
     const response = await api.post(`/content/posts/${postId}/comments`, {
       post_id: postId,
       content,
+      parent_id: parentId,
     });
+    return response.data;
+  },
+
+  likeComment: async (commentId) => {
+    const response = await api.post(`/content/comments/${commentId}/like`);
+    return response.data;
+  },
+
+  unlikeComment: async (commentId) => {
+    const response = await api.delete(`/content/comments/${commentId}/like`);
     return response.data;
   },
 };
@@ -740,7 +751,7 @@ export const notificationsAPI = {
       s = skip?.skip || 0;
       l = skip?.limit || 20;
     }
-    const response = await api.get(`/notifications?skip=${s}&limit=${l}`);
+    const response = await api.get(`/notifications/?skip=${s}&limit=${l}`);
     return response.data;
   },
   markRead: async (id) => {

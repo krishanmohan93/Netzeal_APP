@@ -1229,7 +1229,14 @@ const ProfileDashboardScreen = ({ navigation, route }: any) => {
     isSameByDisplayedInternalId ||
     isSameByDisplayedUsername;
   const showOwnProfileControls = isActuallyOwnProfile;
-  const showSocialActions = !isTabProfileRoute && !isActuallyOwnProfile && isOtherProfileByRoute;
+  const hasOtherProfileContext = Boolean(
+    paramUserId ||
+      normalizedParamUsername ||
+      viewingUserId ||
+      viewingUserInternalId
+  );
+  const showSocialActions =
+    !isTabProfileRoute && !isActuallyOwnProfile && (isOtherProfileByRoute || hasOtherProfileContext);
   const canGoBack = typeof navigation?.canGoBack === 'function' ? navigation.canGoBack() : false;
 
   return (

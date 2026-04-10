@@ -273,6 +273,10 @@ const ChatScreen = ({ route, navigation }) => {
   const handleSendMessage = async () => {
     const content = inputText.trim();
     if (!content || sending) return;
+    if (!conversationId) {
+      Alert.alert('Please wait', 'Chat is still starting. Try again in a moment.');
+      return;
+    }
     
     setInputText('');
     sendTypingIndicator(false);

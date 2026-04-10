@@ -90,15 +90,28 @@ const NotificationsScreen = () => {
     }
 
     // Navigate logic
+    const senderId =
+      item.sender?.public_id ||
+      item.sender?.id ||
+      item.sender_public_id ||
+      item.sender_id;
+
     if (item.type === 'follow') {
-      const targetId = item.sender?.public_id || item.sender?.id;
-      if (targetId) {
-        navigation.navigate('ProfileDashboard', { userId: targetId });
+      if (senderId) {
+        navigation.navigate('ProfileDashboard', { userId: senderId });
       }
-    } else if (item.type === 'like' || item.type === 'comment') {
-      if (item.entity_id) {
-        navigation.navigate('PostDetail', { postId: item.entity_id });
-      }
+      return;
+    }
+
+    const entityType = String(item.entity_type || item.entity_kind || '').toLowerCase();
+    const isPostActivity =
+      item.type === 'like' ||
+      item.type === 'comment' ||
+      item.type === 'comment_like' ||
+      item.type === 'comment_reply' ||
+      entityType === 'post';
+    if (item.entity_id && isPostActivity) {
+      navigation.navigate('PostDetail', { postId: item.entity_id });
     }
   };
 
@@ -159,8 +172,11 @@ const NotificationsScreen = () => {
   if (notifications.length === 0) {
     return (
       <View style={styles.container}>
-        <View style={styles.center}>
-          <Text style={styles.emptyText}>No notifications yet</Text>
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIcon}>
+            <Text style={styles.emptyIconText}>N</Text>
+          </View>
+          <Text style={styles.emptyTitle}>No notifications yet</Text>
           <Text style={styles.emptySubText}>Follow, like, and comment activity will appear here.</Text>
         </View>
       </View>
@@ -173,7 +189,7 @@ const NotificationsScreen = () => {
         data={notifications}
         renderItem={renderItem}
         keyExtractor={(item, index) => String(item?.id ?? `notification-${index}`)}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         contentContainerStyle={styles.listContent}
       />
     </View>
@@ -183,47 +199,58 @@ const NotificationsScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.background,
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    backgroundColor: colors.background,
   },
   listContent: {
-    paddingBottom: 12,
+    paddingTop: 12,
+    paddingBottom: 20,
   },
   item: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#eee',
-    alignItems: 'flex-start',
+    paddingVertical: 14,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
   unreadItem: {
-    backgroundColor: '#f0f9ff',
+    borderColor: colors.primaryLight,
+    backgroundColor: colors.secondary,
   },
   avatarContainer: {
     width: 44,
     height: 44,
     marginRight: 12,
-    marginTop: 2,
   },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#ddd',
+    backgroundColor: colors.border,
   },
   avatarFallback: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#d9d9d9',
+    backgroundColor: colors.primary,
   },
   avatarFallbackText: {
-    color: '#fff',
+    color: colors.surface,
     fontSize: 14,
     fontWeight: '700',
   },
@@ -234,27 +261,55 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: 14,
-    color: '#000',
+    color: colors.text,
     lineHeight: 20,
   },
   username: {
     fontWeight: 'bold',
+    color: colors.text,
   },
   time: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textLight,
     marginTop: 4,
   },
   emptyText: {
-    color: '#999',
+    color: colors.textSecondary,
     fontSize: 16,
     fontWeight: '600',
   },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  emptyIconText: {
+    fontSize: 24,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 6,
+  },
   emptySubText: {
-    marginTop: 8,
-    color: '#b3b3b3',
+    marginTop: 6,
+    color: colors.textSecondary,
     fontSize: 13,
     textAlign: 'center',
+    lineHeight: 18,
   },
   retryButton: {
     marginTop: 14,
@@ -264,7 +319,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   retryText: {
-    color: '#fff',
+    color: colors.surface,
     fontWeight: '600',
   },
   buttonDisabled: {

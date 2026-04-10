@@ -16,7 +16,7 @@ import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import TermsOfServiceScreen from '../screens/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
-import { PostDetailScreen } from '../screens/PlaceholderScreens';
+import PostDetailScreen from '../screens/PostDetailScreen';
 import ProfileDashboardScreen from '../screens/ProfileDashboardScreen';
 import CreatePostScreen from '../screens/CreatePostScreen';
 import SearchScreen from '../screens/SearchScreen';
